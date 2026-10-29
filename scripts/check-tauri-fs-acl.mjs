@@ -7,7 +7,7 @@ const permissions = new Set(
   capability.permissions.filter((permission) => typeof permission === 'string')
 )
 const fsScope = capability.permissions.find(
-  (permission) => permission?.identifier === 'fs:default'
+  (permission) => permission?.identifier === 'fs:scope'
 )
 
 const requiredPermissions = [

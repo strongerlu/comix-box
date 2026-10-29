@@ -20,7 +20,7 @@ test('memory workbench reads installed Skills from the shared store', () => {
 test('settings exposes the bundled public Skills without copying them into central storage', () => {
   assert.match(settingsPanel, /loadWebSkillCatalog\(\)/)
   assert.match(settingsPanel, /public\/skills\/\{\{ skill\.id \}\}\/SKILL\.md/)
-  assert.match(settingsPanel, /韭菜盒子内置 Skill/)
+  assert.match(settingsPanel, /COMIC-BOX内置 Skill/)
 })
 
 test('Desktop keeps the bundled list while Web exposes only user-installed Skills', () => {

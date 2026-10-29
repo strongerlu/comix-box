@@ -26,7 +26,7 @@ test('MCP OAuth callback accepts only the pending server and state', () => {
 
   assert.deepEqual(
     consumeMcpOAuthCallbackUrl({
-      href: `jiucaihezi://mcp/oauth/callback?server=github&code=oauth-code&state=${state}`,
+      href: `comic-box://mcp/oauth/callback?server=github&code=oauth-code&state=${state}`,
       storage,
     }),
     { serverId: 'github', code: 'oauth-code' },
@@ -39,7 +39,7 @@ test('MCP OAuth callback rejects a code for a different server', () => {
 
   assert.equal(
     consumeMcpOAuthCallbackUrl({
-      href: `jiucaihezi://mcp/oauth/callback?server=notion&code=oauth-code&state=${state}`,
+      href: `comic-box://mcp/oauth/callback?server=notion&code=oauth-code&state=${state}`,
       storage,
     }),
     null,
@@ -52,7 +52,7 @@ test('MCP OAuth callback preserves a matching authorization denial', () => {
 
   assert.deepEqual(
     consumeMcpOAuthCallbackUrl({
-      href: `jiucaihezi://mcp/oauth/callback?server=github&error=access_denied&error_description=cancelled&state=${state}`,
+      href: `comic-box://mcp/oauth/callback?server=github&error=access_denied&error_description=cancelled&state=${state}`,
       storage,
     }),
     { serverId: 'github', error: 'access_denied', errorDescription: 'cancelled' },
@@ -66,7 +66,7 @@ test('MCP OAuth keeps the PKCE verifier until the matching callback completes', 
 
   assert.deepEqual(
     consumeMcpOAuthCallbackUrl({
-      href: `jiucaihezi://mcp/oauth/callback?server=github&code=oauth-code&state=${state}`,
+      href: `comic-box://mcp/oauth/callback?server=github&code=oauth-code&state=${state}`,
       storage,
     }),
     { serverId: 'github', code: 'oauth-code' },

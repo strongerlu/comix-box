@@ -1,27 +1,11 @@
-name: Build Desktop App
+name: Build COMIC-BOX Windows App
 on:
   push:
     tags: ['v*']
   workflow_dispatch:
-    inputs:
-      publish_tag:
-        description: Existing release tag to republish downloads without rebuilding apps
-        required: false
-        type: string
-      native_platform:
-        description: Windows-only diagnostics never promote OTA; formal acceptance requires all
-        required: false
-        default: all
-        type: choice
-        options: [all, windows]
-      promote_updater:
-        description: Promote this signed candidate after three-platform A-to-B upgrade acceptance
-        required: false
-        default: false
-        type: boolean
 
 concurrency:
-  group: desktop-release-${{ github.ref_name }}
+  group: comic-box-windows-release-${{ github.ref_name }}
   cancel-in-progress: false
 
 permissions:
@@ -29,392 +13,20 @@ permissions:
 
 jobs:
   prepare-release:
-    runs-on: ubuntu-latest
+    runs-on: windows-2022
     steps:
       - name: Ensure GitHub Release exists
+        shell: bash
         if: startsWith(github.ref, 'refs/tags/v')
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1 || \
             gh release create "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" \
-              --title "韭菜盒子 $GITHUB_REF_NAME" --notes "Desktop builds"
-
-  macos-arm:
-    needs: prepare-release
-    if: inputs.publish_tag == ''
-    runs-on: macos-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: pnpm/action-setup@v4
-      - uses: actions/setup-node@v4
-        with: { node-version: '24', cache: 'pnpm' }
-      - run: pnpm install
-      - name: Sync version from Git tag
-        run: node scripts/set-version.mjs --auto
-      - name: Build audited Desktop frontend
-        run: pnpm run build:desktop:quick
-
-      - id: build-macos-arm
-        continue-on-error: true
-        uses: tauri-apps/tauri-action@v0
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
-          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
-          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
-          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
-        with:
-          # Publish only the final signed and notarized artifacts below.
-          tauriScript: pnpm tauri
-          args: --target aarch64-apple-darwin --bundles app --config '{"build":{"beforeBuildCommand":""}}'
-
-      - name: Retry macOS ARM build after transient signing failure
-        if: steps.build-macos-arm.outcome == 'failure'
-        uses: tauri-apps/tauri-action@v0
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
-          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
-          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
-          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
-        with:
-          # Publish only the final signed and notarized artifacts below.
-          tauriScript: pnpm tauri
-          args: --target aarch64-apple-darwin --bundles app --config '{"build":{"beforeBuildCommand":""}}'
-
-      - name: Sign nested macOS code (ARM)
-        env:
-          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
-          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
-          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
-        run: |
-          set -euo pipefail
-          # Tauri 打包时会自建临时钥匙串导入证书，并在命令结束时把它销殁；到这一步已经没有可用身份，
-          # codesign 会报 "<identity>: no identity found"（v2.2.3/v2.2.4 连续两次就挂在这）。
-          # 任何“提前把嵌套二进制签好”的方案同样需要一个钥匙串，绕不开，所以这里自备一个。
-          KEYCHAIN="$RUNNER_TEMP/jc-signing.keychain-db"
-          PASSWORD="$(openssl rand -hex 16)"
-          printf '%s' "$APPLE_CERTIFICATE" | tr -d '\n\r ' | openssl base64 -d -A > "$RUNNER_TEMP/jc-cert.p12"
-          security create-keychain -p "$PASSWORD" "$KEYCHAIN"
-          security set-keychain-settings -lut 21600 "$KEYCHAIN"
-          security unlock-keychain -p "$PASSWORD" "$KEYCHAIN"
-          security import "$RUNNER_TEMP/jc-cert.p12" -k "$KEYCHAIN" -P "$APPLE_CERTIFICATE_PASSWORD" -T /usr/bin/codesign
-          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$PASSWORD" "$KEYCHAIN" > /dev/null
-          security list-keychains -d user -s "$KEYCHAIN" $(security list-keychains -d user | tr -d '"')
-          node scripts/fix-macos-app.mjs "src-tauri/target/aarch64-apple-darwin/release/bundle/macos/韭菜盒子.app"
-
-      - name: Notarize and staple final App (ARM)
-        env:
-          APPLE_ID: ${{ secrets.APPLE_ID }}
-          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
-          APPLE_APP_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
-        run: |
-          set -euo pipefail
-          APP="src-tauri/target/aarch64-apple-darwin/release/bundle/macos/韭菜盒子.app"
-          ZIP="$RUNNER_TEMP/notary-app.zip"
-          ditto -c -k --keepParent "$APP" "$ZIP"
-          accepted=false
-          for attempt in 1 2 3; do
-            echo "App 公证尝试 $attempt/3"
-            if result=$(xcrun notarytool submit "$ZIP" --apple-id "$APPLE_ID" --team-id "$APPLE_TEAM_ID" --password "$APPLE_APP_PASSWORD" --timeout 30m --wait --output-format json); then
-              if [ "$(echo "$result" | jq -r '.status')" = Accepted ]; then accepted=true; break; fi
-              xcrun notarytool log "$(echo "$result" | jq -r '.id')" --apple-id "$APPLE_ID" --team-id "$APPLE_TEAM_ID" --password "$APPLE_APP_PASSWORD"
-              exit 1
-            fi
-            sleep 30
-          done
-          [ "$accepted" = true ] || exit 1
-          node scripts/apple-stapler.mjs staple "$APP"
-          node scripts/apple-stapler.mjs validate "$APP"
-          codesign --verify --deep --strict "$APP"
-
-      - name: Create DMG (ARM, headless)
-        run: |
-          set -euo pipefail
-          APP="src-tauri/target/aarch64-apple-darwin/release/bundle/macos/韭菜盒子.app"
-          BUNDLE="src-tauri/target/aarch64-apple-darwin/release/bundle/dmg"
-          SOURCE=$(mktemp -d)
-          DMG="$BUNDLE/韭菜盒子_${GITHUB_REF_NAME}_aarch64.dmg"
-          mkdir -p "$BUNDLE"
-          cp -R "$APP" "$SOURCE/韭菜盒子.app"
-          ln -s /Applications "$SOURCE/Applications"
-          hdiutil create -volname "韭菜盒子" -srcfolder "$SOURCE" -ov -format UDZO "$DMG"
-          rm -rf "$SOURCE"
-
-      - name: Notarize macOS app (ARM)
-        env:
-          APPLE_ID: ${{ secrets.APPLE_ID }}
-          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
-          APPLE_APP_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
-        run: |
-          # 优化网络连接设置，增大 HTTP 超时阈值，解决 Apple notary 上传卡住和连接中断问题
-          defaults write com.apple.gke.notary.tool nt-upload-connection-timeout 300
-          
-          for dmg in src-tauri/target/aarch64-apple-darwin/release/bundle/dmg/*.dmg; do
-            echo "公证: $dmg"
-            # 引入重试机制与明确的超时机制，防止单次长连接因网络瞬断导致整条流水线报错
-            for i in {1..3}; do
-              echo "开始提交公证（第 $i 次尝试）..."
-              if result=$(xcrun notarytool submit "$dmg" \
-                --apple-id "$APPLE_ID" \
-                --team-id "$APPLE_TEAM_ID" \
-                --password "$APPLE_APP_PASSWORD" \
-                --timeout 30m \
-                --wait \
-                --output-format json); then
-                echo "$result" | jq .
-                submission_id=$(echo "$result" | jq -r '.id')
-                if [ "$(echo "$result" | jq -r '.status')" = "Accepted" ]; then
-                  echo "✅ 公证成功"
-                  break
-                fi
-                echo "❌ Apple 拒绝公证"
-                xcrun notarytool log "$submission_id" \
-                  --apple-id "$APPLE_ID" \
-                  --team-id "$APPLE_TEAM_ID" \
-                  --password "$APPLE_APP_PASSWORD" || true
-                exit 1
-              else
-                echo "⚠️ 第 $i 次尝试失败，可能是网络抖动，等待 30 秒后重试..."
-                if [ $i -eq 3 ]; then
-                  echo "❌ 已达到最大重试次数，公证失败"
-                  exit 1
-                fi
-                sleep 30
-              fi
-            done
-            node scripts/apple-stapler.mjs staple "$dmg"
-            node scripts/apple-stapler.mjs validate "$dmg"
-          done
-
-      - name: Generate SHA256
-        run: |
-          for dmg in src-tauri/target/aarch64-apple-darwin/release/bundle/dmg/*.dmg; do
-            shasum -a 256 "$dmg" > "${dmg}.sha256"
-            gh release upload "$GITHUB_REF_NAME" "$dmg" --clobber
-          done
-          tar -czf "$RUNNER_TEMP/_aarch64.app.tar.gz" \
-            -C src-tauri/target/aarch64-apple-darwin/release/bundle/macos "韭菜盒子.app"
-          gh release upload "$GITHUB_REF_NAME" "$RUNNER_TEMP/_aarch64.app.tar.gz" --clobber
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Smoke test — memory app boundary (ARM)
-        run: |
-          DMG=$(ls src-tauri/target/aarch64-apple-darwin/release/bundle/dmg/*.dmg 2>/dev/null | head -1)
-          if [ -z "$DMG" ]; then echo "⚠️ 未找到 DMG，跳过 smoke test"; exit 0; fi
-          hdiutil attach "$DMG" -quiet
-          APP_PATH=$(find /Volumes -maxdepth 2 -name "*.app" 2>/dev/null | head -1)
-          if [ -z "$APP_PATH" ]; then echo "❌ 未找到 .app"; exit 1; fi
-          echo "APP_PATH=$APP_PATH"
-          if find "$APP_PATH/Contents/MacOS" -maxdepth 1 -type f -iname 'opencode*' -print -quit | grep -q .; then
-            echo "❌ 记忆 APP 不得携带 OpenCode sidecar"
-            exit 1
-          fi
-          echo "✅ 未携带 OpenCode sidecar"
-          echo "=== 启动存活(15s) ==="
-          MAIN_BIN=$(/usr/libexec/PlistBuddy -c "Print :CFBundleExecutable" "$APP_PATH/Contents/Info.plist")
-          "$APP_PATH/Contents/MacOS/$MAIN_BIN" & APP_PID=$!; sleep 15
-          if kill -0 $APP_PID 2>/dev/null; then echo "✅ 存活"; kill $APP_PID; else echo "❌ 提前退出"; exit 1; fi
-          hdiutil detach "$(echo "$APP_PATH" | sed -E 's#(/Volumes/[^/]+).*#\1#')" -quiet || true
-
-  macos-intel:
-    needs: prepare-release
-    if: inputs.publish_tag == ''
-    # 使用 macos-15-intel（原生 Intel x86_64）而非 macos-latest（ARM64），
-    # 避免交叉编译 libsqlite3-sys / ring 等 C 依赖到 x86_64 的潜在问题。
-    # GitHub 已公告 macos-13 退役；fallback: macos-13 或交叉编译 + 显式 SDKROOT。
-    runs-on: macos-15-intel
-    steps:
-      - uses: actions/checkout@v4
-      - uses: pnpm/action-setup@v4
-      - uses: actions/setup-node@v4
-        with: { node-version: '24', cache: 'pnpm' }
-      - run: pnpm install
-
-      - name: Sync version from Git tag
-        run: node scripts/set-version.mjs --auto
-      - name: Install Rust x86_64 target
-        run: rustup target add x86_64-apple-darwin
-
-      - name: Build audited Desktop frontend
-        run: pnpm run build:desktop:quick
-
-      - uses: tauri-apps/tauri-action@v0
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
-          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
-          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
-          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
-        with:
-          # Publish only the final signed and notarized artifacts below.
-          tauriScript: pnpm tauri
-          # macos-15-intel 没有可用 Finder 会话；Tauri 默认 DMG 的 AppleScript 美化会失败。
-          # 先只生成已签名 .app，下一步用 hdiutil 生成可安装 DMG。
-          args: --target x86_64-apple-darwin --bundles app --config '{"build":{"beforeBuildCommand":""}}'
-
-      - name: Sign nested macOS code (Intel)
-        env:
-          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
-          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
-          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
-        run: |
-          set -euo pipefail
-          # 同 ARM：Tauri 的临时钥匙串到这一步已经没了，必须自备（详见上面的注释）。
-          KEYCHAIN="$RUNNER_TEMP/jc-signing.keychain-db"
-          PASSWORD="$(openssl rand -hex 16)"
-          printf '%s' "$APPLE_CERTIFICATE" | tr -d '\n\r ' | openssl base64 -d -A > "$RUNNER_TEMP/jc-cert.p12"
-          security create-keychain -p "$PASSWORD" "$KEYCHAIN"
-          security set-keychain-settings -lut 21600 "$KEYCHAIN"
-          security unlock-keychain -p "$PASSWORD" "$KEYCHAIN"
-          security import "$RUNNER_TEMP/jc-cert.p12" -k "$KEYCHAIN" -P "$APPLE_CERTIFICATE_PASSWORD" -T /usr/bin/codesign
-          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$PASSWORD" "$KEYCHAIN" > /dev/null
-          security list-keychains -d user -s "$KEYCHAIN" $(security list-keychains -d user | tr -d '"')
-          node scripts/fix-macos-app.mjs "src-tauri/target/x86_64-apple-darwin/release/bundle/macos/韭菜盒子.app"
-
-      - name: Notarize and staple final App (Intel)
-        env:
-          APPLE_ID: ${{ secrets.APPLE_ID }}
-          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
-          APPLE_APP_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
-        run: |
-          set -euo pipefail
-          APP="src-tauri/target/x86_64-apple-darwin/release/bundle/macos/韭菜盒子.app"
-          ZIP="$RUNNER_TEMP/notary-app.zip"
-          ditto -c -k --keepParent "$APP" "$ZIP"
-          accepted=false
-          for attempt in 1 2 3; do
-            echo "App 公证尝试 $attempt/3"
-            if result=$(xcrun notarytool submit "$ZIP" --apple-id "$APPLE_ID" --team-id "$APPLE_TEAM_ID" --password "$APPLE_APP_PASSWORD" --timeout 30m --wait --output-format json); then
-              if [ "$(echo "$result" | jq -r '.status')" = Accepted ]; then accepted=true; break; fi
-              xcrun notarytool log "$(echo "$result" | jq -r '.id')" --apple-id "$APPLE_ID" --team-id "$APPLE_TEAM_ID" --password "$APPLE_APP_PASSWORD"
-              exit 1
-            fi
-            sleep 30
-          done
-          [ "$accepted" = true ] || exit 1
-          node scripts/apple-stapler.mjs staple "$APP"
-          node scripts/apple-stapler.mjs validate "$APP"
-          codesign --verify --deep --strict "$APP"
-
-      - name: Create DMG (Intel, headless)
-        run: |
-          set -euo pipefail
-          APP="src-tauri/target/x86_64-apple-darwin/release/bundle/macos/韭菜盒子.app"
-          BUNDLE="src-tauri/target/x86_64-apple-darwin/release/bundle/dmg"
-          SOURCE=$(mktemp -d)
-          DMG="$BUNDLE/韭菜盒子_${GITHUB_REF_NAME}_x64.dmg"
-          mkdir -p "$BUNDLE"
-          TMP_DMG=""
-          cleanup() {
-            rm -rf "$SOURCE"
-            if [ -n "$TMP_DMG" ]; then rm -f "$TMP_DMG"; fi
-          }
-          trap cleanup EXIT
-          cp -R "$APP" "$SOURCE/韭菜盒子.app"
-          ln -s /Applications "$SOURCE/Applications"
-          for attempt in 1 2 3; do
-            TMP_DMG="$BUNDLE/.韭菜盒子_${GITHUB_REF_NAME}_x64_attempt_${attempt}.dmg"
-            rm -f "$TMP_DMG"
-            if hdiutil create -volname "韭菜盒子" -srcfolder "$SOURCE" -ov -format UDZO "$TMP_DMG"; then
-              mv "$TMP_DMG" "$DMG"
-              TMP_DMG=""
-              break
-            fi
-            if [ "$attempt" -eq 3 ]; then
-              echo "DMG creation failed after $attempt attempts; current disk images:"
-              hdiutil info || true
-              exit 1
-            fi
-            echo "hdiutil failed on attempt $attempt; retrying after cleanup"
-            hdiutil info || true
-            sleep $((attempt * 10))
-          done
-
-      - name: Notarize macOS app (Intel)
-        env:
-          APPLE_ID: ${{ secrets.APPLE_ID }}
-          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
-          APPLE_APP_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
-        run: |
-          # 优化网络连接设置，增大 HTTP 超时阈值，解决 Apple notary 上传卡住和连接中断问题
-          defaults write com.apple.gke.notary.tool nt-upload-connection-timeout 300
-          
-          for dmg in src-tauri/target/x86_64-apple-darwin/release/bundle/dmg/*.dmg; do
-            echo "公证: $dmg"
-            # 引入重试机制与明确的超时机制，防止单次长连接因网络瞬断导致整条流水线报错
-            for i in {1..3}; do
-              echo "开始提交公证（第 $i 次尝试）..."
-              if result=$(xcrun notarytool submit "$dmg" \
-                --apple-id "$APPLE_ID" \
-                --team-id "$APPLE_TEAM_ID" \
-                --password "$APPLE_APP_PASSWORD" \
-                --timeout 30m \
-                --wait \
-                --output-format json); then
-                echo "$result" | jq .
-                submission_id=$(echo "$result" | jq -r '.id')
-                if [ "$(echo "$result" | jq -r '.status')" = "Accepted" ]; then
-                  echo "✅ 公证成功"
-                  break
-                fi
-                echo "❌ Apple 拒绝公证"
-                xcrun notarytool log "$submission_id" \
-                  --apple-id "$APPLE_ID" \
-                  --team-id "$APPLE_TEAM_ID" \
-                  --password "$APPLE_APP_PASSWORD" || true
-                exit 1
-              else
-                echo "⚠️ 第 $i 次尝试失败，可能是网络抖动，等待 30 秒后重试..."
-                if [ $i -eq 3 ]; then
-                  echo "❌ 已达到最大重试次数，公证失败"
-                  exit 1
-                fi
-                sleep 30
-              fi
-            done
-            node scripts/apple-stapler.mjs staple "$dmg"
-            node scripts/apple-stapler.mjs validate "$dmg"
-          done
-
-      - name: Generate SHA256
-        run: |
-          for dmg in src-tauri/target/x86_64-apple-darwin/release/bundle/dmg/*.dmg; do
-            shasum -a 256 "$dmg" > "${dmg}.sha256"
-            gh release upload "$GITHUB_REF_NAME" "$dmg" --clobber
-          done
-          tar -czf "$RUNNER_TEMP/_x64.app.tar.gz" \
-            -C src-tauri/target/x86_64-apple-darwin/release/bundle/macos "韭菜盒子.app"
-          gh release upload "$GITHUB_REF_NAME" "$RUNNER_TEMP/_x64.app.tar.gz" --clobber
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Smoke test — memory app boundary (Intel)
-        run: |
-          DMG=$(ls src-tauri/target/x86_64-apple-darwin/release/bundle/dmg/*.dmg 2>/dev/null | head -1)
-          if [ -z "$DMG" ]; then echo "⚠️ 未找到 DMG，跳过 smoke test"; exit 0; fi
-          hdiutil attach "$DMG" -quiet
-          APP_PATH=$(find /Volumes -maxdepth 2 -name "*.app" 2>/dev/null | head -1)
-          if [ -z "$APP_PATH" ]; then echo "❌ 未找到 .app"; exit 1; fi
-          echo "APP_PATH=$APP_PATH"
-          if find "$APP_PATH/Contents/MacOS" -maxdepth 1 -type f -iname 'opencode*' -print -quit | grep -q .; then
-            echo "❌ 记忆 APP 不得携带 OpenCode sidecar"
-            exit 1
-          fi
-          echo "✅ 未携带 OpenCode sidecar"
-          echo "=== 架构校验 ==="
-          MAIN_BIN=$(/usr/libexec/PlistBuddy -c "Print :CFBundleExecutable" "$APP_PATH/Contents/Info.plist")
-          file "$APP_PATH/Contents/MacOS/$MAIN_BIN"
-          echo "=== 启动存活(15s) ==="
-          "$APP_PATH/Contents/MacOS/$MAIN_BIN" & APP_PID=$!; sleep 15
-          if kill -0 $APP_PID 2>/dev/null; then echo "✅ 存活"; kill $APP_PID; else echo "❌ 提前退出"; exit 1; fi
-          hdiutil detach "$(echo "$APP_PATH" | sed -E 's#(/Volumes/[^/]+).*#\1#')" -quiet || true
+              --title "COMIC-BOX $GITHUB_REF_NAME" --notes "Desktop builds"
 
   windows:
     needs: prepare-release
-    if: inputs.publish_tag == ''
     runs-on: windows-2022
     steps:
       - uses: actions/checkout@v4
@@ -439,16 +51,16 @@ jobs:
           if (-not $setup) {
             throw "未生成 Windows NSIS 安装器"
           }
-          $setupPath = "src-tauri\target\韭菜盒子_${env:GITHUB_REF_NAME}_x64_windows_setup.exe"
+          $setupPath = "src-tauri\target\COMIC-BOX_${env:GITHUB_REF_NAME}_x64_windows_setup.exe"
           Copy-Item $setup.FullName $setupPath
 
       - name: Smoke test — Windows app startup
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
-          $exe = "src-tauri\target\x86_64-pc-windows-msvc\release\jiucaihezi-app.exe"
+          $exe = "src-tauri\target\x86_64-pc-windows-msvc\release\comic-box.exe"
           $stderr = Join-Path $env:RUNNER_TEMP "jiucaihezi-startup.stderr.log"
-          $app = Start-Process -FilePath $exe -PassThru -RedirectStandardError $stderr
+          $app = Start-Process -FilePath $exe -WindowStyle Hidden -PassThru -RedirectStandardError $stderr
           Start-Sleep -Seconds 15
           if ($app.HasExited) {
             if (Test-Path $stderr) { Get-Content $stderr }
@@ -463,20 +75,20 @@ jobs:
           $ErrorActionPreference = "Stop"
           $releaseDir = "src-tauri\target\x86_64-pc-windows-msvc\release"
           $portableRoot = "src-tauri\target\windows-portable"
-          $portableDir = Join-Path $portableRoot "韭菜盒子"
-          $zipPath = "src-tauri\target\韭菜盒子_${env:GITHUB_REF_NAME}_x64_windows_portable.zip"
-          $setupPath = "src-tauri\target\韭菜盒子_${env:GITHUB_REF_NAME}_x64_windows_setup.exe"
+          $portableDir = Join-Path $portableRoot "COMIC-BOX"
+          $zipPath = "src-tauri\target\COMIC-BOX_${env:GITHUB_REF_NAME}_x64_windows_portable.zip"
+          $setupPath = "src-tauri\target\COMIC-BOX_${env:GITHUB_REF_NAME}_x64_windows_setup.exe"
 
           if (Test-Path $portableRoot) {
             Remove-Item $portableRoot -Recurse -Force
           }
           New-Item -ItemType Directory -Force $portableDir | Out-Null
 
-          Copy-Item "$releaseDir\jiucaihezi-app.exe" (Join-Path $portableDir "韭菜盒子.exe")
+          Copy-Item "$releaseDir\comic-box.exe" (Join-Path $portableDir "COMIC-BOX.exe")
           Copy-Item "$releaseDir\storyboarder" (Join-Path $portableDir "storyboarder") -Recurse
           # 生成 README.txt（Windows 用户解压后可见）
           $readme = @"
-          韭菜盒子 — Windows 便携版
+          COMIC-BOX — Windows 便携版
           ============================
 
           使用前必读：
@@ -485,14 +97,14 @@ jobs:
 
              便携 ZIP 只适合已经安装 WebView2 的用户；请先解压整个 zip 包（不要直接在 zip 里双击运行！）
 
-          2. 韭菜盒子需要 Microsoft Edge WebView2 Runtime。
+          2. COMIC-BOX需要 Microsoft Edge WebView2 Runtime。
              如果打开时提示缺少 WebView2，请下载安装：
              https://go.microsoft.com/fwlink/p/?LinkId=2124703
              （Windows 11 通常已自带；Windows 10 可能需要手动安装）
 
           3. 如果启动后卡在 logo 画面，请尝试以管理员身份运行。
 
-          4. 数据存储位置：%APPDATA%\com.jiucaihezi.desktop\
+          4. 数据存储位置：%APPDATA%\com.comicbox.desktop\
 
           问题反馈：https://github.com/liuyunlong2021-wq/jiucaihezi-app/issues
           "@
@@ -506,8 +118,8 @@ jobs:
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
-          $zipPath = "src-tauri\target\韭菜盒子_${env:GITHUB_REF_NAME}_x64_windows_portable.zip"
-          $setupPath = "src-tauri\target\韭菜盒子_${env:GITHUB_REF_NAME}_x64_windows_setup.exe"
+          $zipPath = "src-tauri\target\COMIC-BOX_${env:GITHUB_REF_NAME}_x64_windows_portable.zip"
+          $setupPath = "src-tauri\target\COMIC-BOX_${env:GITHUB_REF_NAME}_x64_windows_setup.exe"
           if (-not (Test-Path $zipPath)) {
             Write-Host "⚠️ 未找到 zip，跳过 smoke test"
             exit 0
@@ -523,7 +135,7 @@ jobs:
           $names = $zip.Entries | ForEach-Object { $_.Name }
           $paths = $zip.Entries | ForEach-Object { $_.FullName.Replace("\", "/") }
           $zip.Dispose()
-          $required = @("韭菜盒子.exe", "README.txt")
+          $required = @("COMIC-BOX.exe", "README.txt")
           foreach ($name in $required) {
             if ($name -in $names) {
               Write-Host "✅ $name"
@@ -562,222 +174,13 @@ jobs:
         run: |
           $ErrorActionPreference = "Stop"
           $tag = "${env:GITHUB_REF_NAME}"
-          $zipPath = "src-tauri\target\韭菜盒子_${tag}_x64_windows_portable.zip"
-          $setupPath = "src-tauri\target\韭菜盒子_${tag}_x64_windows_setup.exe"
+          $zipPath = "src-tauri\target\COMIC-BOX_${tag}_x64_windows_portable.zip"
+          $setupPath = "src-tauri\target\COMIC-BOX_${tag}_x64_windows_setup.exe"
           if (-not (Test-Path $zipPath) -or -not (Test-Path $setupPath)) { throw "Windows 发布资产缺失" }
           gh release upload $tag $zipPath $setupPath --clobber
           $hashPath = Join-Path $env:RUNNER_TEMP "native-windows-files.json"
           $payload = Join-Path $env:RUNNER_TEMP "native-final-payload"
-          & "$env:ProgramFiles\7-Zip\7z.exe" e -y $setupPath "jiucaihezi-app.exe" "-o$payload"
+          & "$env:ProgramFiles\7-Zip\7z.exe" e -y $setupPath "comic-box.exe" "-o$payload"
           if ($LASTEXITCODE -ne 0) { throw "Cannot extract the final NSIS executable" }
-          node scripts/native-windows-fingerprint.mjs "src-tauri/target/x86_64-pc-windows-msvc/release" $hashPath (Join-Path $payload "jiucaihezi-app.exe")
+          node scripts/native-windows-fingerprint.mjs "src-tauri/target/x86_64-pc-windows-msvc/release" $hashPath (Join-Path $payload "comic-box.exe")
           gh release upload $tag $hashPath --clobber
-
-  publish-download-manifest:
-    needs: [macos-arm, macos-intel, windows]
-    runs-on: ubuntu-latest
-    concurrency:
-      group: desktop-download-publish
-      cancel-in-progress: false
-    if: >-
-      always() &&
-      (inputs.publish_tag != '' ||
-      (startsWith(github.ref, 'refs/tags/v') &&
-      needs.macos-arm.result == 'success' &&
-      needs.macos-intel.result == 'success' &&
-      needs.windows.result == 'success'))
-    steps:
-      # 保留服务器源文件作为迁移回滚；R2 只承担公开分发。
-      - uses: actions/checkout@v4
-        with:
-          # 发布工具取本次工作流版本，publish_tag 只选择不可变安装包。
-          ref: ${{ github.ref }}
-      - uses: actions/setup-node@v4
-        with: { node-version: '24' }
-      - uses: actions/setup-python@v5
-        with: { python-version: '3.12' }
-      - name: Install release R2 client
-        run: python -m pip install boto3==1.40.61
-      - name: Install official signature verifier
-        run: sudo apt-get update && sudo apt-get install -y minisign
-      - name: Publish signed candidates and public download manifest
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
-          DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
-          DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
-          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
-          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
-        run: |
-          set -euo pipefail
-          TAG="${{ inputs.publish_tag || github.ref_name }}"
-          VERSION="${TAG#v}"
-          [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || exit 2
-          ASSET_DIR="$RUNNER_TEMP/download-assets"
-          KEY_PATH="$RUNNER_TEMP/deploy-key"
-          mkdir -p "$ASSET_DIR"
-          gh release download "$TAG" --repo "$GITHUB_REPOSITORY" --dir "$ASSET_DIR" \
-            --pattern '*_aarch64.dmg' \
-            --pattern '*_x64.dmg' \
-            --pattern '*_x64_windows_setup.exe' \
-            --pattern '*_x64_windows_portable.zip' \
-            --pattern '*_aarch64.app.tar.gz' \
-            --pattern '*_x64.app.tar.gz'
-
-          ARM_DMG=$(find "$ASSET_DIR" -maxdepth 1 -name '*_aarch64.dmg' -print -quit)
-          INTEL_DMG=$(find "$ASSET_DIR" -maxdepth 1 -name '*_x64.dmg' -print -quit)
-          WIN_INSTALLER=$(find "$ASSET_DIR" -maxdepth 1 -name '*_x64_windows_setup.exe' -print -quit)
-          for asset in "$ARM_DMG" "$INTEL_DMG" "$WIN_INSTALLER"; do
-            [ -f "$asset" ] || { echo "Missing release asset: $asset"; exit 1; }
-          done
-
-          ARM_UPDATE="$ASSET_DIR/_aarch64.app.tar.gz"
-          INTEL_UPDATE="$ASSET_DIR/_x64.app.tar.gz"
-          # 重跑复用已签产物；同版本不覆盖已发布签名或文件字节。
-          gh release download "$TAG" --repo "$GITHUB_REPOSITORY" --dir "$ASSET_DIR" --pattern '*.sig' || true
-          node scripts/sign-updater.mjs "$VERSION" "$ARM_UPDATE" "$INTEL_UPDATE" "$WIN_INSTALLER"
-          for asset in "$ARM_UPDATE" "$INTEL_UPDATE" "$WIN_INSTALLER"; do
-            gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json assets --jq '.assets[].name' | grep -Fx "$(basename "$asset.sig")" >/dev/null || \
-              gh release upload "$TAG" "$asset.sig" --repo "$GITHUB_REPOSITORY"
-          done
-          node scripts/updater-manifest.mjs "$VERSION" "$ASSET_DIR/updater.json" "$ARM_UPDATE" "$INTEL_UPDATE" "$WIN_INSTALLER"
-
-          BASE_URL="https://api.jiucaihezi.studio/updates/$VERSION"
-          jq -n \
-            --arg version "$VERSION" \
-            --arg published "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
-            --arg arm "$BASE_URL/$(basename "$ARM_DMG")" \
-            --arg intel "$BASE_URL/$(basename "$INTEL_DMG")" \
-            --arg windows "$BASE_URL/$(basename "$WIN_INSTALLER")" \
-            '{version:$version,notes:"更新内容见 GitHub Releases",pub_date:$published,platforms:{"darwin-aarch64":{url:$arm},"darwin-x86_64":{url:$intel},"windows-x86_64":{url:$windows}}}' \
-            > "$ASSET_DIR/latest.json"
-
-          printf '%s\n' "$DEPLOY_SSH_KEY" > "$KEY_PATH"
-          chmod 600 "$KEY_PATH"
-          R2_CONFIG="$RUNNER_TEMP/release-r2.env"
-          trap 'rm -f "$KEY_PATH" "$R2_CONFIG"' EXIT
-          # 复用部署 SSH，专用桶凭据只经加密连接进入临时文件，不增加客户端配置。
-          (umask 077; ssh -i "$KEY_PATH" -o StrictHostKeyChecking=no "${DEPLOY_USER}@${DEPLOY_HOST}" \
-            "cat /root/jc-release-r2.env" > "$R2_CONFIG")
-          # 已有公开摘要不可改写；新版本才生成原有 SHA256SUMS。
-          if ssh -i "$KEY_PATH" -o StrictHostKeyChecking=no "${DEPLOY_USER}@${DEPLOY_HOST}" \
-            "test -f '/opt/updates/$VERSION/SHA256SUMS'"; then
-            scp -i "$KEY_PATH" -o StrictHostKeyChecking=no "${DEPLOY_USER}@${DEPLOY_HOST}:/opt/updates/$VERSION/SHA256SUMS" "$ASSET_DIR/SHA256SUMS"
-            (cd "$ASSET_DIR" && sha256sum -c SHA256SUMS)
-          else
-            (cd "$ASSET_DIR" && sha256sum -- ./*.dmg ./*.exe ./*.zip ./*.app.tar.gz ./*.sig > SHA256SUMS)
-          fi
-          # 独立摘要覆盖便携 ZIP 和历史摘要本身，不覆盖任何已发布文件。
-          (cd "$ASSET_DIR" && sha256sum -- ./*.dmg ./*.exe ./*.zip ./*.app.tar.gz ./*.sig SHA256SUMS > R2-SHA256SUMS)
-          python scripts/publish-r2-updates.py "$VERSION" "$ASSET_DIR" "$R2_CONFIG"
-          node scripts/verify-online-updates.mjs "$VERSION" "$ASSET_DIR" r2
-
-          STAGE="/opt/updates/.candidate-${VERSION}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
-          ssh -i "$KEY_PATH" -o StrictHostKeyChecking=no "${DEPLOY_USER}@${DEPLOY_HOST}" "mkdir -p '$STAGE'"
-          # 仅传服务器缺少的文件；现有文件在提交阶段逐字节核对，禁止覆盖。
-          for asset in "$ASSET_DIR/"*; do
-            name="$(basename "$asset")"
-            if ! ssh -i "$KEY_PATH" -o StrictHostKeyChecking=no "${DEPLOY_USER}@${DEPLOY_HOST}" "test -f '/opt/updates/$VERSION/$name'"; then
-              scp -i "$KEY_PATH" -o StrictHostKeyChecking=no "$asset" "${DEPLOY_USER}@${DEPLOY_HOST}:$STAGE/"
-            fi
-          done
-          # 清单和 R2 摘要作为本次提交输入；签名包及历史摘要不覆盖。
-          scp -i "$KEY_PATH" -o StrictHostKeyChecking=no "$ASSET_DIR/latest.json" "$ASSET_DIR/updater.json" "$ASSET_DIR/R2-SHA256SUMS" \
-            "${DEPLOY_USER}@${DEPLOY_HOST}:$STAGE/"
-          ssh -i "$KEY_PATH" -o StrictHostKeyChecking=no "${DEPLOY_USER}@${DEPLOY_HOST}" \
-            "bash -s -- '$STAGE' '$VERSION'" <<'REMOTE'
-          set -euo pipefail
-          stage="$1"; version="$2"; final="/opt/updates/$version"
-          exec 9>/opt/updates/.assets.lock; flock -x 9
-          mkdir -p "$final"
-          for file in "$stage/"*; do
-            name="$(basename "$file")"
-            case "$name" in latest.json|updater.json|R2-SHA256SUMS) continue;; esac
-            if [ -f "$final/$name" ]; then
-              cmp "$file" "$final/$name"
-            else
-              mv "$file" "$final/$name"
-            fi
-          done
-          (cd "$final" && sha256sum -c "$stage/R2-SHA256SUMS")
-          if [ -f "$final/R2-SHA256SUMS" ]; then cmp "$stage/R2-SHA256SUMS" "$final/R2-SHA256SUMS"; fi
-          cp "$stage/latest.json" "$stage/updater.json" "$stage/R2-SHA256SUMS" "$final/"
-          rm -rf "$stage"
-          REMOTE
-          ssh -i "$KEY_PATH" -o StrictHostKeyChecking=no "${DEPLOY_USER}@${DEPLOY_HOST}" "mkdir -p /opt/updates/.release-tools"
-          scp -i "$KEY_PATH" -o StrictHostKeyChecking=no scripts/publish-r2-updates.py scripts/configure-r2-downloads.py \
-            "${DEPLOY_USER}@${DEPLOY_HOST}:/opt/updates/.release-tools/"
-          ssh -i "$KEY_PATH" -o StrictHostKeyChecking=no "${DEPLOY_USER}@${DEPLOY_HOST}" \
-            "python3 -" < scripts/configure-updater-cache.py
-          ssh -i "$KEY_PATH" -o StrictHostKeyChecking=no "${DEPLOY_USER}@${DEPLOY_HOST}" \
-            "python3 /opt/updates/.release-tools/configure-r2-downloads.py '$VERSION' '/opt/updates/$VERSION'"
-          # 兼容验证或清单推广失败时恢复此次下载映射；正式 OTA 保持独立。
-          if ! node scripts/verify-online-updates.mjs "$VERSION" "$ASSET_DIR" redirects || \
-             ! ssh -i "$KEY_PATH" -o StrictHostKeyChecking=no "${DEPLOY_USER}@${DEPLOY_HOST}" \
-               "bash -s /opt/updates '$VERSION' downloads" < scripts/promote-updates.sh; then
-            ssh -i "$KEY_PATH" -o StrictHostKeyChecking=no "${DEPLOY_USER}@${DEPLOY_HOST}" \
-              "python3 /opt/updates/.release-tools/configure-r2-downloads.py '$VERSION' '/opt/updates/$VERSION' rollback"
-            exit 1
-          fi
-          # 迁移验收完成前不清理服务器源文件；R2 不执行版本自动删除。
-
-  verify-native-upgrade:
-    needs: publish-download-manifest
-    if: always() && needs.publish-download-manifest.result == 'success'
-    strategy:
-      fail-fast: false
-      matrix: ${{ fromJSON(inputs.native_platform == 'windows' && '{"include":[{"os":"windows-2022","package":"*_x64_windows_setup.exe","baseline":"*_x64_windows_setup.exe"}]}' || '{"include":[{"os":"macos-latest","package":"_aarch64.app.tar.gz","baseline":"_aarch64.app.tar.gz"},{"os":"macos-15-intel","package":"_x64.app.tar.gz","baseline":"_x64.app.tar.gz"},{"os":"windows-2022","package":"*_x64_windows_setup.exe","baseline":"*_x64_windows_setup.exe"}]}') }}
-    runs-on: ${{ matrix.os }}
-    steps:
-      - uses: actions/checkout@v4
-      - uses: pnpm/action-setup@v4
-      - uses: actions/setup-node@v4
-        with: { node-version: '24', cache: 'pnpm' }
-      - run: pnpm install
-      - run: pnpm run build:desktop:quick
-      - name: Download signed candidate and isolated baseline
-        shell: bash
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          CANDIDATE_TAG: ${{ inputs.publish_tag || github.ref_name }}
-          PACKAGE: ${{ matrix.package }}
-          BASELINE: ${{ matrix.baseline }}
-        run: |
-          set -euo pipefail
-          mkdir -p "$RUNNER_TEMP/upgrade-assets" "$RUNNER_TEMP/baseline-assets"
-          gh release download "$CANDIDATE_TAG" --repo "$GITHUB_REPOSITORY" --dir "$RUNNER_TEMP/upgrade-assets" --pattern "$PACKAGE" --pattern "$PACKAGE.sig"
-          # 使用已接入 updater 的正式 A 版，验收真实 A→B 官方安装链路。
-          gh release download v2.2.22 --repo "$GITHUB_REPOSITORY" --dir "$RUNNER_TEMP/baseline-assets" --pattern "$BASELINE"
-          if [ "$RUNNER_OS" = Windows ]; then
-            cp "$RUNNER_TEMP/baseline-assets/"*.exe "$RUNNER_TEMP/upgrade-assets/baseline_setup.exe"
-            gh release download "$CANDIDATE_TAG" --repo "$GITHUB_REPOSITORY" --dir "$RUNNER_TEMP/upgrade-assets" --pattern native-windows-files.json
-          else
-            cp "$RUNNER_TEMP/baseline-assets/$BASELINE" "$RUNNER_TEMP/upgrade-assets/baseline$BASELINE"
-          fi
-      - name: Verify official native installation, resources and startup
-        shell: bash
-        env:
-          CANDIDATE_TAG: ${{ inputs.publish_tag || github.ref_name }}
-        run: node scripts/native-upgrade-probe.mjs "${CANDIDATE_TAG#v}" 2.2.22 "$RUNNER_TEMP/upgrade-assets"
-
-  promote-updater:
-    needs: verify-native-upgrade
-    # 版本标签发布在三平台验收后自动推广；既有版本重发仍支持显式推广。
-    if: always() && needs.verify-native-upgrade.result == 'success' && inputs.native_platform != 'windows' && ((github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')) || (inputs.promote_updater == true && inputs.publish_tag != ''))
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - name: Atomically promote accepted OTA candidate
-        env:
-          CANDIDATE_TAG: ${{ inputs.publish_tag || github.ref_name }}
-          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
-          DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
-          DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
-        run: |
-          set -euo pipefail
-          VERSION="${CANDIDATE_TAG#v}"
-          [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || exit 2
-          KEY_PATH="$RUNNER_TEMP/deploy-key"
-          printf '%s\n' "$DEPLOY_SSH_KEY" > "$KEY_PATH"; chmod 600 "$KEY_PATH"
-          ssh -i "$KEY_PATH" -o StrictHostKeyChecking=no "${DEPLOY_USER}@${DEPLOY_HOST}" \
-            "bash -s /opt/updates '$VERSION' updater" < scripts/promote-updates.sh

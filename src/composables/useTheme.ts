@@ -1,24 +1,26 @@
 /**
  * composables/useTheme.ts — 主题切换
- * 4 个主题: white / light / dark / green
+ * 3 个主题：暖昼 / 曜石 / 极光
  */
 import { ref, watch } from 'vue'
 import { isTauriRuntime } from '@/utils/tauriEnv'
 
-type Theme = 'white' | 'light' | 'dark' | 'green' | 'nord' | 'dracula'
+type Theme = 'light' | 'dark' | 'aurora'
 
 /** 主题全集：切换按钮按此顺序循环，新增主题只需加在这里 + design-tokens.css 的 token 块 */
-const THEME_KEYS: Theme[] = ['white', 'light', 'dark', 'green', 'nord', 'dracula']
+const THEME_KEYS: Theme[] = ['light', 'dark', 'aurora']
 
 function normalizeTheme(value: string | null): Theme {
   const v = String(value || '').toLowerCase()
-  return (THEME_KEYS as string[]).includes(v) ? (v as Theme) : 'light'
+  if ((THEME_KEYS as string[]).includes(v)) return v as Theme
+  if (v === 'dracula') return 'dark'
+  return 'light'
 }
 
 function initialTheme(): Theme {
   if (!isTauriRuntime() && localStorage.getItem('jcMemoryThemeInitialized') !== '1') {
     localStorage.setItem('jcMemoryThemeInitialized', '1')
-    return 'green'
+    return 'light'
   }
   return normalizeTheme(localStorage.getItem('jcTheme'))
 }
@@ -53,8 +55,7 @@ export function useTheme() {
   watch(theme, (t) => {
     // 图标/文案描述的是「下一个」主题，不是当前主题
     const iconMap: Record<string, string> = {
-      white: 'dark_mode', light: 'dark_mode', dark: 'eco', green: 'light_mode',
-      nord: 'dark_mode', dracula: 'light_mode',
+      light: 'dark_mode', dark: 'flare', aurora: 'light_mode',
     }
     themeIcon.value = iconMap[t] || 'dark_mode'
   }, { immediate: true })
@@ -62,10 +63,9 @@ export function useTheme() {
   const themeLabel = ref('')
   watch(theme, (t) => {
     const labelMap: Record<string, string> = {
-      white: '切换浅色模式', light: '切换黑夜模式', dark: '切换柔绿模式',
-      green: '切换冷灰模式', nord: '切换暗紫模式', dracula: '切换白色模式',
+      light: '切换曜石模式', dark: '切换极光模式', aurora: '切换暖昼模式',
     }
-    themeLabel.value = labelMap[t] || '切换黑夜模式'
+    themeLabel.value = labelMap[t] || '切换曜石模式'
   }, { immediate: true })
 
   return { theme, toggle, setTheme, themeIcon, themeLabel }

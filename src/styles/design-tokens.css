@@ -1,29 +1,29 @@
-/* 韭菜盒子 · 设计令牌 — 中性浅色工作台与语义色 */
+/* COMIC-BOX · 设计令牌 — 暖昼工作台，与智剪共享奶油白底色、琥珀强调色与深暖墨色 */
 :root {
   color-scheme: light;
 
-  --jc-surface: #FAFAFA;
+  --jc-surface: #F4F2ED;
   --jc-surface-container-lowest: #FFFFFF;
-  --jc-surface-container-low: #F2F2F4;
-  --jc-surface-container: #E9E9EC;
-  --jc-surface-container-high: #DFDFE3;
-  --jc-surface-container-highest: #D2D2D7;
-  --jc-surface-dim: #EDEDF0;
+  --jc-surface-container-low: #F7F5F0;
+  --jc-surface-container: #EFECE5;
+  --jc-surface-container-high: #E8E3D9;
+  --jc-surface-container-highest: #DED8CC;
+  --jc-surface-dim: #EEEAE2;
 
-  --jc-primary: #4A5D23;
-  --jc-primary-container: #37461B;
+  --jc-primary: #A65012;
+  --jc-primary-container: #7C3B0C;
   --jc-on-primary: #FFFFFF;
 
-  --jc-secondary-container: #E8EBE3;
-  --jc-on-secondary-container: #3A4730;
+  --jc-secondary-container: #F2E4D4;
+  --jc-on-secondary-container: #57391F;
 
-  --jc-on-surface: #1D1D1F;
-  --jc-on-surface-variant: #636366;
-  --jc-outline-variant: #DCDCE0;
+  --jc-on-surface: #29231F;
+  --jc-on-surface-variant: #6D6259;
+  --jc-outline-variant: #DED4C6;
 
-  --jc-error: #B9443A;
-  --jc-success: #386747;
-  --jc-warning: #966820;
+  --jc-error: #B5473B;
+  --jc-success: #367351;
+  --jc-warning: #92540E;
 
   --jc-shadow-color: rgba(0, 0, 0, 0.06);
   --jc-shadow-sm: 0 4px 12px var(--jc-shadow-color);
@@ -79,49 +79,81 @@
   --app-header-height: 52px;
 
   /* Account / Membership area */
-  --jc-account-card-bg: rgba(255, 255, 255, 0.88);
-  --jc-member-glow: #966820;
-  --jc-member-glow-text: #3A4730;
+  --jc-account-card-bg: rgba(255, 255, 255, 0.9);
+  --jc-member-glow: #92540E;
+  --jc-member-glow-text: #57391F;
 
   /* Agent tone colors（对齐 OpenCode 官方 agentTones） */
-  --icon-agent-ask-base: #4A5D23;
-  --icon-agent-build-base: #B9443A;
-  --icon-agent-docs-base: #386747;
+  --icon-agent-ask-base: #A65012;
+  --icon-agent-build-base: #B5473B;
+  --icon-agent-docs-base: #367351;
   --icon-agent-plan-base: #6C71C4;
 }
 
 :root[data-theme="dark"], [data-theme="dark"] {
   color-scheme: dark;
 
-  --jc-surface: #171A16;
-  --jc-surface-container-lowest: #1E221C;
-  --jc-surface-container-low: #272D23;
-  --jc-surface-container: #30372B;
-  --jc-surface-container-high: #394233;
-  --jc-surface-container-highest: #46513E;
-  --jc-surface-dim: #131612;
+  --jc-surface: #090D12;
+  --jc-surface-container-lowest: #131820;
+  --jc-surface-container-low: #0C1016;
+  --jc-surface-container: #171D26;
+  --jc-surface-container-high: #202833;
+  --jc-surface-container-highest: #2B3541;
+  --jc-surface-dim: #090D12;
 
-  --jc-primary: #BDD28E;
-  --jc-primary-container: #D0E3A2;
-  --jc-on-primary: #1A2213;
+  --jc-primary: #F59E0B;
+  --jc-primary-container: #D97706;
+  --jc-on-primary: #261700;
 
-  --jc-secondary-container: #30372B;
-  --jc-on-secondary-container: #D7E5C0;
+  --jc-secondary-container: #322614;
+  --jc-on-secondary-container: #F7D99A;
 
-  --jc-on-surface: #EEF1E9;
-  --jc-on-surface-variant: #B5BEAA;
-  --jc-outline-variant: #3B4335;
+  --jc-on-surface: #F8FAFC;
+  --jc-on-surface-variant: #AAB4C1;
+  --jc-outline-variant: #303A46;
 
-  --jc-error: #E9AAA2;
-  --jc-success: #A6CCAF;
-  --jc-warning: #E6C17D;
+  --jc-error: #FCA5A5;
+  --jc-success: #6EE7B7;
+  --jc-warning: #FCD34D;
 
   --jc-shadow-color: rgba(0, 0, 0, 0.36);
 
   /* Account / Membership area */
   --jc-account-card-bg: rgba(255, 255, 255, 0.06);
-  --jc-member-glow: #c9a834;
-  --jc-member-glow-text: #f0d878;
+  --jc-member-glow: #F59E0B;
+  --jc-member-glow-text: #F7D99A;
+}
+
+:root[data-theme="aurora"], [data-theme="aurora"] {
+  color-scheme: dark;
+
+  --jc-surface: #060B14;
+  --jc-surface-container-lowest: #0D1626;
+  --jc-surface-container-low: #08101C;
+  --jc-surface-container: #102039;
+  --jc-surface-container-high: #162B49;
+  --jc-surface-container-highest: #1D3658;
+  --jc-surface-dim: #060B14;
+
+  --jc-primary: #22D3EE;
+  --jc-primary-container: #0891B2;
+  --jc-on-primary: #04131D;
+
+  --jc-secondary-container: #10233D;
+  --jc-on-secondary-container: #A5F3FC;
+
+  --jc-on-surface: #F0F9FF;
+  --jc-on-surface-variant: #A7BED8;
+  --jc-outline-variant: #263A56;
+
+  --jc-error: #FB7185;
+  --jc-success: #34D399;
+  --jc-warning: #FBBF24;
+
+  --jc-shadow-color: rgba(2, 6, 23, 0.45);
+  --jc-account-card-bg: rgba(13, 22, 38, 0.88);
+  --jc-member-glow: #22D3EE;
+  --jc-member-glow-text: #A5F3FC;
 }
 
 :root[data-theme="green"], [data-theme="green"] {

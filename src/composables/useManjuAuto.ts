@@ -8,8 +8,10 @@ import { runCreationOperation } from '@/runtime/creation/creationMcpBridge'
 import { getCreationModelSpec, prioritizedCreationModelIds } from '@/runtime/creation/creationModelRegistry'
 import { createAutoRun, deriveCheckpoint, episodeInstruction, handleCheckpointSaved, referenceAdvice, resumeAutoRun, revisionInstruction, runAuto, AUTO_RUN_PATH, type AutoRunConfig, type AutoRunState, type ReferenceAdvice, type ReviewNotes, type RunnerCheckpoint, type VideoRoute } from '@/runtime/manjuAuto/autoRunner'
 import { createDesktopAssetDeps, createDesktopVideoDeps, loadMediaParamProfile } from '@/runtime/manjuAuto/desktopDeps'
+import type { MediaParamProfile } from '@/runtime/manjuAuto/mediaParams'
 import { ASSET_REGISTRY_PATH, awaitAsset, awaitEpisodeAssets, promptBody, regenerateAsset, type AssetRegistryEntry } from '@/runtime/manjuAuto/assetScheduler'
-import { awaitSegment, checkEpisodeVideos, regenerateSegment as resubmitSegment, submitEpisodeVideos } from '@/runtime/manjuAuto/videoScheduler'
+import { awaitSegment, checkEpisodeVideos, regenerateSegment as resubmitSegment, submitEpisodeVideos, videoRegistryPath, listSegmentVersions, restoreSegmentVersion, rememberSegmentVersion, registerProcessedVersion, saveSegmentReview, type SegmentReviewNote, type VideoVersion } from '@/runtime/manjuAuto/videoScheduler'
+import { rewriteCheckpointPrompt, validatePromptReferences } from '@/runtime/manjuAuto/checkpointPreflight'
 import { createRuntimeProjectFileService, createSkillDraftFiles } from '@/services/projectFileService'
 import { emitEvent } from '@/utils/eventBus'
 
@@ -82,7 +84,7 @@ export function useManjuAuto(options: {
   const draft = ref<ManjuAutoDraft | null>(null)
   const review = shallowRef<{ ids: string[]; images: Record<string, string> } | null>(null)
   /** 审片：本集各段视频（按片段顺序），revised 为按修改意见重做过的段号（从 0 起）。忙碌与错误沿用 reviewBusy / reviewErrors，键为段号，整集修改用 revise。 */
-  const cutReview = shallowRef<{ episode: number; videos: string[]; revised?: number[] } | null>(null)
+  const cutReview = shallowRef<{ episode: number; videos: string[]; revised?: number[]; versions?: VideoVersion[][]; firstFrameAvailable?: boolean[]; frameBindings?: Array<string | undefined>; notes?: Array<SegmentReviewNote | undefined>; framePreviews?: Record<number, string> } | null>(null)
   /** 审图时正在单独重新生成的图，以及每张图最近一次重新生成的错误。 */
   const reviewBusy = ref<Record<string, boolean>>({})
   const reviewErrors = ref<Record<string, string>>({})
@@ -98,6 +100,8 @@ export function useManjuAuto(options: {
   let liveDeps: Parameters<typeof runAuto>[1] | undefined
   // runAuto 原地修改这份状态；事件处理必须改同一个对象，run.value 只是界面快照。
   let liveState: AutoRunState | undefined
+  let liveProfile: MediaParamProfile | undefined
+  let reviewWrite: Promise<void> = Promise.resolve()
 
   const files = (owner: string) => createSkillDraftFiles(createRuntimeProjectFileService(), owner)
   const checkpointPath = (wikiRoot: string, route: string, episode: number) => `${wikiRoot}/制作流水线/${route}/第${episode}集进度.json`
@@ -188,27 +192,34 @@ export function useManjuAuto(options: {
       const [imageProfile, videoProfile] = media
         ? await Promise.all([loadMediaParamProfile(state.config.imageModelId), loadMediaParamProfile(state.config.videoModelId)])
         : [{ keys: [], imageKey: 'images' }, { keys: [], imageKey: 'images' }]
+      const continuationProfile = media && state.config.continuationModelId ? await loadMediaParamProfile(state.config.continuationModelId) : undefined
+      if (state.config.continuationModelId && (!continuationProfile?.firstFrame || !continuationProfile.duration)) throw new Error('续接型号未声明首帧能力或有效时长，未提交生成')
+      liveProfile = continuationProfile || videoProfile
+      if (media && !liveProfile.duration) throw new Error('所选视频模型未声明有效时长，请重新读取能力或选择其他型号')
       const projectFiles = files(owner)
       const deps: Parameters<typeof runAuto>[1] = {
         wikiRoot,
-        runEpisodeText: (episode, rewrite) => options.sendText(episodeInstruction(episode, wikiRoot, state.config, rewrite)),
+        runEpisodeText: (episode, rewrite, resumeFrom) => options.sendText(episodeInstruction(episode, wikiRoot, state.config, rewrite, resumeFrom)),
         readCheckpoint: episode => readJson<RunnerCheckpoint>(owner, checkpointPath(wikiRoot, state.config.videoModel, episode)),
         asset: { ...createDesktopAssetDeps(owner, { imageModelId: state.config.imageModelId, ratio: state.config.ratio }, imageProfile), sleep },
-        video: createDesktopVideoDeps(owner, { videoModelId: state.config.videoModelId, ratio: state.config.ratio, resolution: state.config.videoResolution }, videoProfile),
+        video: createDesktopVideoDeps(owner, { videoModelId: state.config.videoModelId, ratio: state.config.ratio, resolution: state.config.videoResolution, continuationModelId: state.config.continuationModelId }, videoProfile, continuationProfile),
         async concat(videos, durations, outputPath) {
-          await invoke('media_concat_videos', { input: { inputs: videos, durations, outputPath: `${owner.replace(/[\\/]+$/, '')}/${outputPath}` } })
+          await invoke('media_concat_videos', { input: { inputs: videos, durations, outputPath: `${owner.replace(/[\\/]+$/, '')}/${outputPath}`, normalize: Boolean(state.config.continuationModelId) } })
           emitEvent('project-filetree:locate', { path: outputPath, owner, refresh: true, quiet: true })
         },
-        waitForReview(ids, images) {
+        async waitForReview(ids, images) {
           reviewBusy.value = {}
-          reviewErrors.value = {}
+          const registry = await readJson<{ assets: Record<string, AssetRegistryEntry> }>(owner, `${wikiRoot}/${ASSET_REGISTRY_PATH}`)
+          reviewErrors.value = Object.fromEntries(ids.filter(id => !images[id]).map(id => [id, registry?.assets[id]?.error || '尚未取得图片，请单独重新生成或停止后换模型续做']))
           review.value = { ids, images }
           return new Promise(resolve => { reviewResolve = resolve })
         },
-        waitForVideoReview(episode, videos) {
+        async waitForVideoReview(episode, videos) {
           reviewBusy.value = {}
-          reviewErrors.value = {}
+          const registry = await readJson<{ segments: Array<{ error?: string }> }>(owner, `${wikiRoot}/${videoRegistryPath(state.config.videoModel, episode)}`)
+          reviewErrors.value = Object.fromEntries(videos.flatMap((video, index) => registry?.segments[index]?.error || !video ? [[String(index), registry?.segments[index]?.error || '尚未取得视频，请核对任务记录；主动重新生成会创建新的付费请求']] : []))
           cutReview.value = { episode, videos }
+          await refreshCutReview()
           return new Promise(resolve => { cutResolve = resolve })
         },
         async save(next) {
@@ -245,6 +256,7 @@ export function useManjuAuto(options: {
       if (session === mine) {
         liveDeps = undefined
         liveState = undefined
+        liveProfile = undefined
         review.value = null
         cutReview.value = null
       }
@@ -280,11 +292,13 @@ export function useManjuAuto(options: {
 
   /** 改写一个 Wiki 提示词正文，保留原标题；返回写入后的全文。 */
   async function rewritePrompt(owner: string, path: string, body: string) {
-    const original = await files(owner).readText(path)
-    const heading = original.match(/^(?:\s*#[^\n]*\n)+/)?.[0] || ''
-    const text = `${heading}${body.trim()}\n`
-    await files(owner).writeText(path, text)
-    return text
+    if (!liveDeps || !liveState) throw new Error('当前没有可编辑的制作任务')
+    const episode = cutReview.value?.episode || Number(Object.entries(liveState.episodes).find(([, item]) => item.phase === 'review')?.[0])
+    const checkpoint = await liveDeps.readCheckpoint(episode)
+    if (!checkpoint) throw new Error('找不到本集进度')
+    const segment = checkpoint.segments?.find(item => item.path === path)
+    if (segment) validatePromptReferences(body, segment.refs || [], checkpoint.video_model)
+    return rewriteCheckpointPrompt(liveDeps.wikiRoot, checkpoint, path, body, liveDeps.asset)
   }
 
   async function segmentCheckpoint() {
@@ -301,19 +315,23 @@ export function useManjuAuto(options: {
   }
 
   /** 审片时单独重做一段：可先改提示词（保留标题），沿用原参考图与时长，只动这一段。 */
-  async function regenerateSegment(index: number, newPrompt?: string) {
+  async function regenerateSegment(index: number, newPrompt?: string, previousTail = false) {
     const owner = options.owner()
     const deps = liveDeps
     const key = String(index)
-    if (!owner || !deps || !cutReview.value || reviewBusy.value[key]) return
+    if (!owner || !deps || !cutReview.value || Object.values(reviewBusy.value).some(Boolean)) return
     reviewBusy.value = { ...reviewBusy.value, [key]: true }
     reviewErrors.value = { ...reviewErrors.value, [key]: '' }
     try {
+      await reviewWrite
       const checkpoint = await segmentCheckpoint()
+      await rememberSegmentVersion(deps.wikiRoot, checkpoint, index, deps.video)
       if (newPrompt !== undefined) await rewritePrompt(owner, checkpoint.segments[index].path, newPrompt)
-      await resubmitSegment(deps.wikiRoot, checkpoint, index, deps.video)
-      const video = await awaitSegment(deps.wikiRoot, checkpoint, index, deps.video, { sleep: ms => new Promise(resolve => setTimeout(resolve, ms)), timeoutMs: 60 * 60_000 })
+      const currentCheckpoint = newPrompt !== undefined ? await segmentCheckpoint() : checkpoint
+      await resubmitSegment(deps.wikiRoot, currentCheckpoint, index, deps.video, { previousTail })
+      const video = await awaitSegment(deps.wikiRoot, currentCheckpoint, index, deps.video, { sleep: ms => new Promise(resolve => setTimeout(resolve, ms)), timeoutMs: 60 * 60_000 })
       if (cutReview.value) cutReview.value = { ...cutReview.value, videos: cutReview.value.videos.map((item, i) => i === index ? video : item) }
+      await refreshCutReview()
     } catch (cause) {
       reviewErrors.value = { ...reviewErrors.value, [key]: cause instanceof Error ? cause.message : String(cause) }
     } finally {
@@ -333,6 +351,9 @@ export function useManjuAuto(options: {
     reviewBusy.value = { ...reviewBusy.value, revise: true }
     reviewErrors.value = {}
     try {
+      await reviewWrite
+      const before = await segmentCheckpoint()
+      for (let index = 0; index < before.segments.length; index++) await rememberSegmentVersion(deps.wikiRoot, before, index, deps.video)
       await options.sendText(revisionInstruction(current.episode, state.config, notes))
       const checkpoint = await deps.readCheckpoint(current.episode)
       if (checkpoint?.stage !== 'complete') throw new Error(checkpoint?.reason || '修改没有完成，请看对话里的说明')
@@ -344,6 +365,7 @@ export function useManjuAuto(options: {
         const result = await checkEpisodeVideos(deps.wikiRoot, checkpoint, deps.video)
         if (result.status === 'ready') {
           if (cutReview.value) cutReview.value = { episode: current.episode, videos: result.videos, revised: result.videos.flatMap((video, i) => video === current.videos[i] ? [] : [i]) }
+          await refreshCutReview()
           break
         }
         if (result.status === 'failed') throw new Error(`第${result.failed.join('、')}段视频生成失败`)
@@ -357,8 +379,82 @@ export function useManjuAuto(options: {
     }
   }
 
-  function approveCut() {
-    if (Object.values(reviewBusy.value).some(Boolean)) return
+  async function refreshCutReview() {
+    const current = cutReview.value, deps = liveDeps, owner = options.owner()
+    if (!current || !deps || !owner) return
+    const checkpoint = await segmentCheckpoint()
+    const result = await checkEpisodeVideos(deps.wikiRoot, checkpoint, deps.video)
+    const registry = await readJson<{ segments: Array<{ review?: SegmentReviewNote; first_frame?: { source_video_path: string }; error?: string }> }>(owner, `${deps.wikiRoot}/${videoRegistryPath(checkpoint.video_model, current.episode)}`)
+    const versions = await Promise.all(checkpoint.segments.map((_, index) => listSegmentVersions(deps.wikiRoot, checkpoint, index, deps.video)))
+    if (cutReview.value?.episode !== current.episode) return
+    for (const [index, entry] of (registry?.segments || []).entries()) reviewErrors.value = { ...reviewErrors.value, [String(index)]: entry.error || '' }
+    cutReview.value = { ...current, videos: result.videos, versions,
+      firstFrameAvailable: checkpoint.segments.map((segment, i) => i > 0 && Boolean(result.videos[i - 1]) && Boolean(deps.video.continuation || liveProfile?.firstFrame && (!liveProfile.firstFrame.exclusive || !segment.refs?.length))),
+      frameBindings: registry?.segments.map(entry => entry.first_frame?.source_video_path), notes: registry?.segments.map(entry => entry.review) }
+  }
+
+  async function restoreVersion(index: number, id: string) {
+    const deps = liveDeps
+    if (!deps || !cutReview.value || Object.values(reviewBusy.value).some(Boolean)) return
+    const key = String(index)
+    reviewBusy.value = { ...reviewBusy.value, [key]: true }
+    reviewErrors.value = { ...reviewErrors.value, [key]: '' }
+    try {
+      await reviewWrite
+      await restoreSegmentVersion(deps.wikiRoot, await segmentCheckpoint(), index, id, deps.video)
+      await refreshCutReview()
+    } catch (cause) { reviewErrors.value = { ...reviewErrors.value, [key]: cause instanceof Error ? cause.message : String(cause) } }
+    finally { reviewBusy.value = { ...reviewBusy.value, [key]: false } }
+  }
+
+  async function recordReview(index: number, review: SegmentReviewNote) {
+    const deps = liveDeps, current = cutReview.value
+    if (!deps || !current || Object.values(reviewBusy.value).some(Boolean)) return
+    reviewWrite = reviewWrite.catch(() => {}).then(async () => {
+      if (deps !== liveDeps || cutReview.value?.episode !== current.episode) return
+      const checkpoint = await deps.readCheckpoint(current.episode)
+      if (!checkpoint) throw new Error('找不到本集进度')
+      await saveSegmentReview(deps.wikiRoot, checkpoint, index, review, deps.video)
+    }).catch(cause => {
+      if (deps === liveDeps) reviewErrors.value = { ...reviewErrors.value, [String(index)]: `意见保存失败：${cause instanceof Error ? cause.message : String(cause)}` }
+    })
+    await reviewWrite
+  }
+
+  async function processSegment(index: number, adjustments: { brightness: number; contrast: number; saturation: number; warmth: number; volume: number }) {
+    const deps = liveDeps, current = cutReview.value
+    if (!deps || !current?.videos[index] || Object.values(reviewBusy.value).some(Boolean)) return
+    const key = String(index)
+    reviewBusy.value = { ...reviewBusy.value, [key]: true }
+    reviewErrors.value = { ...reviewErrors.value, [key]: '' }
+    try {
+      await reviewWrite
+      const checkpoint = await segmentCheckpoint()
+      await rememberSegmentVersion(deps.wikiRoot, checkpoint, index, deps.video)
+      const output = await invoke<string>('media_review_video', { input: { inputPath: current.videos[index], action: 'adjust', ...adjustments } })
+      await registerProcessedVersion(deps.wikiRoot, checkpoint, index, output, deps.video)
+      await refreshCutReview()
+    } catch (cause) { reviewErrors.value = { ...reviewErrors.value, [key]: cause instanceof Error ? cause.message : String(cause) } }
+    finally { reviewBusy.value = { ...reviewBusy.value, [key]: false } }
+  }
+
+  async function previewFrame(index: number) {
+    const current = cutReview.value, deps = liveDeps
+    if (!current || !deps || !deps.video.extractTailFrame || !current.videos[index - 1] || Object.values(reviewBusy.value).some(Boolean)) return
+    const key = String(index)
+    reviewBusy.value = { ...reviewBusy.value, [key]: true }
+    reviewErrors.value = { ...reviewErrors.value, [key]: '' }
+    try {
+      const checkpoint = await segmentCheckpoint(), segment = checkpoint.segments[index - 1]
+      const path = await deps.video.extractTailFrame(current.videos[index - 1], segment.end_seconds - segment.start_seconds)
+      if (liveDeps === deps && cutReview.value?.episode === current.episode) cutReview.value = { ...cutReview.value, framePreviews: { ...cutReview.value.framePreviews, [index]: path } }
+    } catch (cause) { reviewErrors.value = { ...reviewErrors.value, [key]: cause instanceof Error ? cause.message : String(cause) } }
+    finally { reviewBusy.value = { ...reviewBusy.value, [key]: false } }
+  }
+
+  async function approveCut() {
+    await reviewWrite
+    if (!cutReview.value || cutReview.value.videos.some(video => !video) || Object.values(reviewBusy.value).some(Boolean) || Object.values(reviewErrors.value).some(Boolean)) return
     cutReview.value = null
     cutResolve?.('approved')
   }
@@ -395,7 +491,7 @@ export function useManjuAuto(options: {
   }
 
   function approveReview() {
-    if (Object.values(reviewBusy.value).some(Boolean)) return
+    if (!review.value || review.value.ids.some(id => !review.value!.images[id]) || Object.values(reviewBusy.value).some(Boolean) || Object.values(reviewErrors.value).some(Boolean)) return
     review.value = null
     reviewResolve?.('approved')
   }
@@ -414,5 +510,6 @@ export function useManjuAuto(options: {
     }
   }
 
-  return { run, stopping, draft, review, cutReview, loadSegmentPrompt, regenerateSegment, reviseEpisode, approveCut, reviewBusy, reviewErrors, loadPrompt, regenerate, error, preparing, prepare, start, stop, approveReview, handleArtifactSaved, cancelDraft: () => { draft.value = null } }
+  return { run, stopping, draft, review, cutReview, loadSegmentPrompt, regenerateSegment, reviseEpisode, approveCut, reviewBusy, reviewErrors, loadPrompt, regenerate, error, preparing, prepare, start, stop, approveReview, handleArtifactSaved,
+    loadVideoProfile: loadMediaParamProfile, restoreVersion, recordReview, processSegment, previewFrame, cancelDraft: () => { draft.value = null } }
 }

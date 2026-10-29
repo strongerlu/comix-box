@@ -412,7 +412,8 @@ mod tests {
     #[test]
     fn test_get_skills_database_path_returns_app_db_file() {
         let path = get_skills_database_path_impl();
-        assert!(path.ends_with("db.sqlite"));
-        assert!(path.contains(".skillsmanage"));
+        assert!(std::path::Path::new(&path).ends_with(
+            std::path::Path::new(".comic-box").join("skillsmanage").join("db.sqlite")
+        ));
     }
 }

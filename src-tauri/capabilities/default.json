@@ -2,7 +2,7 @@
   "identifier": "default",
   "description": "Main window capabilities — FS access scoped to app data",
   "windows": ["main", "ws-*", "win-*"],
-  "platforms": ["macOS", "windows", "linux"],
+  "platforms": ["windows"],
   "remote": {
     "urls": ["http://localhost:1420/*"]
   },
@@ -10,20 +10,23 @@
     "core:default",
     "core:window:allow-start-dragging",
     "allow-app-commands",
+    "fs:default",
     {
-      "identifier": "fs:default",
+      "identifier": "fs:scope",
       "allow": [
         { "path": "$APPDATA/**" },
+        { "path": "$APPDATA/deepseek-harness" },
+        { "path": "$APPDATA/deepseek-harness/**" },
         { "path": "$DOWNLOAD/**" },
         { "path": "$TEMP/jiucaihezi-skill-drafts/**" },
-        { "path": "$HOME/.jiucaihezi/**" },
-        { "path": "$HOME/韭菜盒子/**" },
+        { "path": "$HOME/.comic-box/**" },
+        { "path": "$HOME/COMIC-BOX/**" },
         { "path": "$HOME/.agents/**" },
         { "path": "$HOME/.skillsmanage/**" }
       ],
       "deny": [
-        { "path": "$HOME/.jiucaihezi/.session" },
-        { "path": "$HOME/.jiucaihezi/.session.tmp" }
+        { "path": "$HOME/.comic-box/.session" },
+        { "path": "$HOME/.comic-box/.session.tmp" }
       ]
     },
     "fs:allow-read-dir",

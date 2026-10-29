@@ -67,7 +67,7 @@ test('parseBackupPackage rejects invalid packages with Chinese errors', () => {
   )
   assert.throws(
     () => parseBackupPackage({ app: 'other' }),
-    /不是韭菜盒子 Web 备份/
+    /不是COMIC-BOX Web 备份/
   )
   assert.throws(
     () => parseBackupPackage(backup({ stores: { messages: 'bad' as any } })),

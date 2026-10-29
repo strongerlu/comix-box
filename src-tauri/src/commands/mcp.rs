@@ -44,24 +44,8 @@ struct ReapScope<'a> {
     realm: &'a str,
 }
 
-#[cfg(unix)]
-fn exit_signal(status: &std::process::ExitStatus) -> Option<String> {
-    use std::os::unix::process::ExitStatusExt;
-    status.signal().map(|signal| signal.to_string())
-}
-
 #[cfg(not(unix))]
 fn exit_signal(_status: &std::process::ExitStatus) -> Option<String> { None }
-
-/// stdio 服务和收尾命令属于后台进程，不应创建用户可见的控制台。
-fn configure_background_command(_command: &mut std::process::Command) {
-    #[cfg(windows)]
-    {
-        use std::os::windows::process::CommandExt;
-        const CREATE_NO_WINDOW: u32 = 0x08000000;
-        _command.creation_flags(CREATE_NO_WINDOW);
-    }
-}
 
 static MCP_PROCESSES: LazyLock<Mutex<HashMap<String, McpStdioProcess>>> =
     LazyLock::new(|| Mutex::new(HashMap::new()));
@@ -82,8 +66,6 @@ pub async fn mcp_spawn_stdio(
     on_stderr: Channel<String>,
     on_exit: Channel<String>,
 ) -> Result<String, String> {
-    #[cfg(not(any(target_os = "ios", target_os = "android")))]
-    let _update_task = super::desktop_update::native_task(window.app_handle(), "启动 MCP 服务")?;
     let owner = Owner { window: window.label().to_string(), realm };
     let mut resolved_command = resolve_local_binary(&command);
     let mut resolved_args = args;
@@ -109,31 +91,19 @@ pub async fn mcp_spawn_stdio(
     };
     // `runner.mjs` 自己还会拉起一个 `dsh --profile sdk` 子进程，收尾必须按进程树走。
     let is_harness_runner = resolved_args.iter().any(|arg| arg.ends_with("runner.mjs"));
-    #[cfg(not(windows))]
-    let mut cmd = Command::new(&resolved_command);
-    configure_background_command(cmd.as_std_mut());
+
+    super::tools::configure_background_command(cmd.as_std_mut());
     cmd.args(resolved_args)
         .stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
         .kill_on_drop(true);
     // POSIX：先让子进程自立门户（组号 = pid），收尾时一次带走它和它的子孙。
-    #[cfg(unix)]
-    cmd.process_group(0);
     if let Some(dir) = cwd {
         cmd.current_dir(dir);
     }
     if let Some(env) = env {
         cmd.envs(env);
-    }
-    #[cfg(unix)]
-    if let Some(bin_dir) = resolved_command.parent() {
-        let path = std::env::var_os("PATH").unwrap_or_default();
-        let mut paths = vec![bin_dir.to_path_buf()];
-        paths.extend(std::env::split_paths(&path));
-        if let Ok(path) = std::env::join_paths(paths) {
-            cmd.env("PATH", path);
-        }
     }
 
     let mut child = cmd
@@ -188,7 +158,6 @@ pub async fn mcp_spawn_stdio(
     Ok(handle_id)
 }
 
-
 #[tauri::command]
 pub async fn mcp_write_stdin(handle_id: String, message: String) -> Result<(), String> {
     // 只在登记表锁内取句柄；管道背压不能挡住 kill、重载或关窗的进程回收。
@@ -226,17 +195,11 @@ fn tree_kill_plan(pid: u32) -> (&'static str, Vec<String>) {
     )
 }
 
-#[cfg(unix)]
-fn tree_kill_plan(pid: u32) -> (&'static str, Vec<String>) {
-    // 负号表示「这个进程组」；子进程在 spawn 时用 `process_group(0)` 把组号定成了自己的 pid。
-    ("/bin/kill", vec!["-KILL".into(), format!("-{pid}")])
-}
-
 /// 收尾路径专用：`taskkill` / `kill` 都是毫秒级命令，阻塞等到返回，换来「返回即已收干净」。
 fn kill_process_tree(pid: u32) -> Result<(), String> {
     let (program, args) = tree_kill_plan(pid);
     let mut command = std::process::Command::new(program);
-    configure_background_command(&mut command);
+    super::tools::configure_background_command(&mut command);
     let status = command
         .args(args)
         .stdin(std::process::Stdio::null())
@@ -244,15 +207,7 @@ fn kill_process_tree(pid: u32) -> Result<(), String> {
         .stderr(std::process::Stdio::null())
         .status().map_err(|error| format!("无法回收 MCP 进程树 {pid}: {error}"))?;
     if status.success() { return Ok(()) }
-    #[cfg(unix)]
-    {
-        // 已退出且组内没有后代时，重复收尾是成功；仍存活却无法杀掉时必须报告失败。
-        let exists = std::process::Command::new("/bin/kill")
-            .args(["-0", &format!("-{pid}")])
-            .stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null())
-            .status().map_err(|error| format!("无法确认 MCP 进程组 {pid}: {error}"))?;
-        if !exists.success() { return Ok(()) }
-    }
+
     #[cfg(windows)]
     if status.code() == Some(128) { return Ok(()) } // taskkill: process not found
     Err(format!("回收 MCP 进程树 {pid} 失败: {status}"))
@@ -376,32 +331,6 @@ pub fn reap_all_stdio_processes() -> usize {
 mod tests {
     use super::*;
 
-    #[cfg(unix)]
-    #[tokio::test]
-    async fn reaped_runner_still_reaps_its_orphaned_descendant() {
-        let mut cmd = Command::new("/bin/sh");
-        cmd.args(["-c", "sleep 30 & echo $!; exit 0"])
-            .stdin(std::process::Stdio::piped()).stdout(std::process::Stdio::piped()).process_group(0);
-        let mut child = cmd.spawn().unwrap();
-        let pid = child.id().unwrap();
-        let stdin = Arc::new(AsyncMutex::new(child.stdin.take().unwrap()));
-        let mut output = BufReader::new(child.stdout.take().unwrap()).lines();
-        let descendant = output.next_line().await.unwrap().unwrap();
-        child.wait().await.unwrap();
-        assert!(child.id().is_none(), "the original implementation lost the process-group id here");
-        let mut process = McpStdioProcess { pid, child, stdin, is_harness_runner: true, owner: None };
-        reap_stdio_process(&mut process).await.unwrap();
-        tokio::time::timeout(std::time::Duration::from_secs(2), async {
-            loop {
-                let status = std::process::Command::new("/bin/ps").args(["-o", "stat=", "-p", &descendant])
-                    .output().unwrap();
-                let state = String::from_utf8_lossy(&status.stdout);
-                if state.trim().is_empty() || state.trim().starts_with('Z') { break }
-                tokio::time::sleep(std::time::Duration::from_millis(10)).await;
-            }
-        }).await.expect("the descendant must die even after the runner has been waited on");
-    }
-
     #[tokio::test]
     async fn stdin_backpressure_does_not_block_process_reaping() {
         if std::env::var_os("JC_STDIO_BACKPRESSURE_CHILD").is_some() {
@@ -415,8 +344,6 @@ mod tests {
             .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::null())
             .kill_on_drop(true);
-        #[cfg(unix)]
-        cmd.process_group(0);
         let mut child = cmd.spawn().unwrap();
         let pid = child.id().unwrap();
         let stdin = Arc::new(AsyncMutex::new(child.stdin.take().unwrap()));
@@ -454,7 +381,7 @@ mod tests {
         let mut command = std::process::Command::new(std::env::current_exe().unwrap());
         // 测试宿主可能已有隐藏控制台；强制请求新控制台，验证配置确实覆盖它。
         command.creation_flags(0x00000010);
-        configure_background_command(&mut command);
+        crate::commands::tools::configure_background_command(&mut command);
         let output = command
             .args(["background_commands_keep_stdio_without_creating_a_console", "--nocapture"])
             .env("JC_CONSOLE_PROBE_CHILD", "1")
@@ -477,11 +404,7 @@ mod tests {
             assert!(args.contains(&"/F".to_string()), "taskkill 必须带 /F: {args:?}");
             assert_eq!(args.last().map(String::as_str), Some("4242"));
         }
-        #[cfg(unix)]
-        {
-            assert_eq!(program, "/bin/kill");
-            assert_eq!(args, vec!["-KILL".to_string(), "-4242".to_string()]);
-        }
+
     }
 
     fn owned(window: &str, realm: &str) -> Owner {

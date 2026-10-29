@@ -471,7 +471,7 @@
     "id": "jc-new-user-guide",
     "name": "jc-new-user-guide",
     "displayName": "新手指南",
-    "description": "Use when a user asks how to use Jiucaihezi (韭菜盒子), especially what each @ entry does (@Office / @影音 / @3D / @MCP / Skill / Wiki Memory), short-drama, novel or manga creation, the Creation Panel, media generation, account and model setup, settings, projects, or first-use guidance. Only trigger for Jiucaihezi-specific requests, not generic writing or generic software help. Trigger on 韭菜盒子怎么用、韭菜盒子新手、@Office、@影音、@3D、@MCP、@的作用、芯片、导出Word、导出表格、导出PPT、生成图片视频、短剧写作、短剧改编、漫剧制作、漫剧创作流程、小说创作、小说怎么写、创作面板怎么用、设置怎么配置、模型怎么选、API Key、jc-new-user-guide.",
+    "description": "Use when a user asks how to use COMIC-BOX, especially what each @ entry does (@Office / @影音 / @3D / @MCP / Skill / Wiki Memory), short-drama, novel or manga creation, the Creation Panel, media generation, account and model setup, settings, projects, or first-use guidance. Only trigger for COMIC-BOX-specific requests, not generic writing or generic software help. Trigger on COMIC-BOX怎么用、COMIC-BOX新手、@Office、@影音、@3D、@MCP、@的作用、芯片、导出Word、导出表格、导出PPT、生成图片视频、短剧写作、短剧改编、漫剧制作、漫剧创作流程、小说创作、小说怎么写、创作面板怎么用、设置怎么配置、模型怎么选、API Key、jc-new-user-guide.",
     "triggers": [],
     "commands": [],
     "files": [

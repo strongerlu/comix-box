@@ -198,7 +198,12 @@ pub fn dev_copy_external(input: DevExternalMoveInput) -> Result<String, String> 
 /// 项目外建目录（用户已给出该路径）。
 #[tauri::command]
 pub fn dev_create_dir_external(input: DevExternalPathInput) -> Result<String, String> {
-    let target = resolve_external_write_path(&input.path)?;
+    let raw = PathBuf::from(input.path.trim());
+    let target = if raw.is_dir() {
+        canonical_external_existing_path(&input.path)?
+    } else {
+        resolve_external_write_path(&input.path)?
+    };
     std::fs::create_dir_all(&target).map_err(|e| format!("创建目录失败: {}", e))?;
     Ok(display_external(&target))
 }
@@ -1656,8 +1661,20 @@ pub fn dev_write_file_if_revision(
     ));
     std::fs::write(&temporary_path, input.content.as_bytes())
         .map_err(|e| format!("写入临时文件失败: {}", e))?;
-    if let Err(error) = replace_file_atomically(&temporary_path, &path) {
+    let mut conflicting_revision = None;
+    let replaced = replace_file_atomically_with_check(&temporary_path, &path, || {
+        let revision = resource_revision(&path).map_err(std::io::Error::other)?;
+        if revision.value != input.expected_revision {
+            conflicting_revision = Some(revision);
+            return Err(std::io::Error::other("文件版本已变化"));
+        }
+        Ok(())
+    });
+    if let Err(error) = replaced {
         let _ = std::fs::remove_file(&temporary_path);
+        if let Some(revision) = conflicting_revision {
+            return Ok(DevWriteFileIfRevisionOutput { status: "conflict".into(), revision: Some(revision) });
+        }
         return Err(format!("原子替换文件失败: {}", error));
     }
     Ok(DevWriteFileIfRevisionOutput {
@@ -1750,13 +1767,17 @@ pub struct DevReplaceFileInput {
     target_relative_path: String,
 }
 
-#[cfg(not(windows))]
+#[cfg(windows)]
 fn replace_file_atomically(temporary_path: &Path, target_path: &Path) -> std::io::Result<()> {
-    std::fs::rename(temporary_path, target_path)
+    replace_file_atomically_with_check(temporary_path, target_path, || Ok(()))
 }
 
 #[cfg(windows)]
-fn replace_file_atomically(temporary_path: &Path, target_path: &Path) -> std::io::Result<()> {
+fn replace_file_atomically_with_check(
+    temporary_path: &Path,
+    target_path: &Path,
+    mut before_replace: impl FnMut() -> std::io::Result<()>,
+) -> std::io::Result<()> {
     use std::iter::once;
     use std::os::windows::ffi::OsStrExt;
 
@@ -1781,17 +1802,29 @@ fn replace_file_atomically(temporary_path: &Path, target_path: &Path) -> std::io
         .encode_wide()
         .chain(once(0))
         .collect::<Vec<_>>();
-    let replaced = unsafe {
-        MoveFileExW(
-            temporary.as_ptr(),
-            target.as_ptr(),
-            MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH,
-        )
-    };
-    if replaced == 0 {
-        return Err(std::io::Error::last_os_error());
+    // Windows readers/indexers can briefly hold handles that disallow replacement.
+    // Retry the atomic operation only; never remove/truncate the destination first.
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(1);
+    loop {
+        before_replace()?;
+        let replaced = unsafe {
+            MoveFileExW(
+                temporary.as_ptr(),
+                target.as_ptr(),
+                MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH,
+            )
+        };
+        if replaced != 0 {
+            return Ok(());
+        }
+        let error = std::io::Error::last_os_error();
+        if !matches!(error.raw_os_error(), Some(5 | 32 | 33))
+            || std::time::Instant::now() >= deadline
+        {
+            return Err(error);
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
     }
-    Ok(())
 }
 
 #[tauri::command]
@@ -1887,12 +1920,11 @@ fn batch_project_entries(
     Ok(entries)
 }
 
-#[cfg(not(any(target_os = "ios", target_os = "android")))]
 fn move_project_path_to_trash(path: &Path) -> Result<(), String> {
     trash::delete(path).map_err(|e| format!("移入废纸篓失败: {}", e))
 }
 
-#[cfg(any(test, target_os = "ios", target_os = "android"))]
+#[cfg(test)]
 fn delete_project_path_permanently(path: &Path) -> Result<(), String> {
     if path.is_dir() {
         std::fs::remove_dir_all(path)
@@ -1900,11 +1932,6 @@ fn delete_project_path_permanently(path: &Path) -> Result<(), String> {
         std::fs::remove_file(path)
     }
     .map_err(|e| format!("永久删除失败: {}", e))
-}
-
-#[cfg(any(target_os = "ios", target_os = "android"))]
-fn move_project_path_to_trash(path: &Path) -> Result<(), String> {
-    delete_project_path_permanently(path)
 }
 
 #[tauri::command]
@@ -2048,17 +2075,6 @@ pub fn dev_reveal_in_finder(path: String) -> Result<(), String> {
     // explorer.exe 的老毛病：不管成功还是失败，退出码都是 1，
     // 所以 Windows 分支只能看 spawn 有没有失败，绝不能看退出码。
     // 另外 /select 后面的路径必须自带引号，否则含空格的路径会被解析错。
-    #[cfg(target_os = "macos")]
-    let result: Result<(), String> = StdCommand::new("open")
-        .arg("-R")
-        .arg(&path)
-        .status()
-        .map_err(|e| format!("打开文件失败: {}", e))
-        .and_then(|s| {
-            s.success()
-                .then_some(())
-                .ok_or_else(|| "打开文件失败。".to_string())
-        });
 
     #[cfg(target_os = "windows")]
     let result: Result<(), String> = {
@@ -2075,17 +2091,6 @@ pub fn dev_reveal_in_finder(path: String) -> Result<(), String> {
             .map(|_| ())
             .map_err(|e| format!("打开文件失败: {}", e))
     };
-
-    #[cfg(all(unix, not(target_os = "macos")))]
-    let result: Result<(), String> = StdCommand::new("xdg-open")
-        .arg(path.parent().unwrap_or(&path))
-        .status()
-        .map_err(|e| format!("打开文件失败: {}", e))
-        .and_then(|s| {
-            s.success()
-                .then_some(())
-                .ok_or_else(|| "打开文件失败。".to_string())
-        });
 
     if let Err(e) = &result {
         eprintln!("[JC] 电脑中打开失败（{}）：{}", path.display(), e);
@@ -2224,9 +2229,7 @@ pub fn dev_get_diff(input: DevGetDiffInput) -> Result<DevGetDiffOutput, String> 
 }
 
 #[tauri::command]
-pub async fn dev_run_command(app: tauri::AppHandle, input: DevRunCommandInput) -> Result<DevRunCommandOutput, String> {
-    #[cfg(not(any(target_os = "ios", target_os = "android")))]
-    let _update_task = super::desktop_update::native_task(&app, "运行命令")?;
+pub async fn dev_run_command(input: DevRunCommandInput) -> Result<DevRunCommandOutput, String> {
     let root = canonical_root(&input.root)?;
     let workdir = match input.external_workdir.as_deref() {
         Some(path) => canonical_external_existing_path(path)?,
@@ -2259,18 +2262,11 @@ pub async fn dev_run_command(app: tauri::AppHandle, input: DevRunCommandInput) -
 }
 
 #[tauri::command]
-pub async fn dev_check_ffmpeg() -> Result<DevFfmpegCheckOutput, String> {
-    #[cfg(windows)]
-    let path = PathBuf::from("ffmpeg");
-    #[cfg(not(windows))]
-    let path = {
-        let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".into());
-        let lookup = Command::new(shell).args(["-lc", "command -v ffmpeg"]).output().await
-            .map_err(|_| "找不到系统 FFmpeg，请安装后重新打开应用".to_string())?;
-        if !lookup.status.success() { return Err("找不到系统 FFmpeg，请安装后重新打开应用".into()); }
-        PathBuf::from(String::from_utf8_lossy(&lookup.stdout).trim())
-    };
-    let output = Command::new(&path).arg("-version").output().await
+pub async fn dev_check_ffmpeg(app: AppHandle) -> Result<DevFfmpegCheckOutput, String> {
+    let path = super::tools::resolve_app_media_binary(&app, "ffmpeg")?;
+    let mut command = Command::new(&path);
+    super::tools::configure_background_command(command.as_std_mut());
+    let output = command.arg("-version").output().await
         .map_err(|_| "FFmpeg 无法启动，请检查系统 PATH".to_string())?;
     if !output.status.success() { return Err("FFmpeg 无法启动，请检查系统 PATH".into()); }
     Ok(DevFfmpegCheckOutput { path: path.to_string_lossy().into_owned() })
@@ -2281,8 +2277,6 @@ pub async fn dev_export_scene_video(
     app: tauri::AppHandle,
     input: DevExportSceneVideoInput,
 ) -> Result<DevExportSceneVideoOutput, String> {
-    #[cfg(not(any(target_os = "ios", target_os = "android")))]
-    let _update_task = super::desktop_update::native_task(&app, "导出视频")?;
     let root = canonical_root(&input.root)?;
     let filename = Path::new(&input.output_filename)
         .file_name()
@@ -2300,19 +2294,12 @@ pub async fn dev_export_scene_video(
     let encoded = temp_dir.join("output.mp4");
     let result = async {
         std::fs::write(&recording, bytes).map_err(|e| format!("写入录制文件失败: {}", e))?;
-        #[cfg(windows)]
-        let ffmpeg = PathBuf::from("ffmpeg");
-        #[cfg(not(windows))]
-        let ffmpeg = {
-            let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".into());
-            let lookup = Command::new(shell).args(["-lc", "command -v ffmpeg"]).output().await
-                .map_err(|_| "找不到系统 FFmpeg，请先安装并确保终端可以运行 ffmpeg".to_string())?;
-            if !lookup.status.success() { return Err("找不到系统 FFmpeg，请先安装并确保终端可以运行 ffmpeg".into()); }
-            PathBuf::from(String::from_utf8_lossy(&lookup.stdout).trim())
-        };
+        let ffmpeg = super::tools::resolve_app_media_binary(&app, "ffmpeg")?;
+        let mut command = Command::new(ffmpeg);
+        super::tools::configure_background_command(command.as_std_mut());
         let output = timeout(
             Duration::from_secs(900),
-            Command::new(ffmpeg)
+            command
                 .args(["-y", "-hide_banner", "-i"])
                 .arg(&recording)
                 .args(["-an", "-r", "30", "-c:v", "libx264", "-pix_fmt", "yuv420p", "-movflags", "+faststart"])
@@ -2387,6 +2374,7 @@ pub async fn dev_generate_video_thumbnail(
     }
 
     let mut command = Command::new("ffmpeg");
+    super::tools::configure_background_command(command.as_std_mut());
     command
         .arg("-hide_banner")
         .arg("-loglevel")
@@ -2415,18 +2403,11 @@ pub async fn dev_generate_video_thumbnail(
 }
 
 #[tauri::command]
-#[cfg(not(any(target_os = "ios", target_os = "android")))]
 pub fn pick_project_folder() -> Result<Option<String>, String> {
     let folder = rfd::FileDialog::new()
         .set_title("选择项目文件夹")
         .pick_folder();
     Ok(folder.map(|p| p.to_string_lossy().to_string()))
-}
-
-#[tauri::command]
-#[cfg(any(target_os = "ios", target_os = "android"))]
-pub fn pick_project_folder() -> Result<Option<String>, String> {
-    Err("移动端项目保存在 App 管理目录，请从云项目创建或打开。".into())
 }
 
 #[derive(Serialize)]
@@ -2496,21 +2477,13 @@ pub fn create_mobile_project(app: AppHandle, name: String) -> Result<MobileProje
 
 // ponytail: 照抄 OpenCode desktop/main/ipc.ts "open-file-picker" handler
 #[tauri::command]
-#[cfg(not(any(target_os = "ios", target_os = "android")))]
 pub fn open_file_picker() -> Result<Option<String>, String> {
     let file = rfd::FileDialog::new().set_title("选择文件").pick_file();
     Ok(file.map(|p| p.to_string_lossy().to_string()))
 }
 
-#[tauri::command]
-#[cfg(any(target_os = "ios", target_os = "android"))]
-pub fn open_file_picker() -> Result<Option<String>, String> {
-    Err("移动端请使用系统附件选择器。".into())
-}
-
 // ponytail: 照抄 OpenCode desktop/main/ipc.ts "save-file-picker" handler
 #[tauri::command]
-#[cfg(not(any(target_os = "ios", target_os = "android")))]
 pub fn save_file_picker(default_name: Option<String>) -> Result<Option<String>, String> {
     let mut dialog = rfd::FileDialog::new().set_title("保存文件");
     if let Some(name) = default_name {
@@ -2521,13 +2494,6 @@ pub fn save_file_picker(default_name: Option<String>) -> Result<Option<String>, 
 }
 
 #[tauri::command]
-#[cfg(any(target_os = "ios", target_os = "android"))]
-pub fn save_file_picker(_default_name: Option<String>) -> Result<Option<String>, String> {
-    Err("移动端请使用系统分享导出文件。".into())
-}
-
-#[tauri::command]
-#[cfg(not(any(target_os = "ios", target_os = "android")))]
 pub fn dev_import_project_files(
     input: DevImportProjectFilesInput,
 ) -> Result<Option<Vec<String>>, String> {
@@ -2544,14 +2510,6 @@ pub fn dev_import_project_files(
         &files,
         &target_relative,
     )?))
-}
-
-#[tauri::command]
-#[cfg(any(target_os = "ios", target_os = "android"))]
-pub fn dev_import_project_files(
-    _input: DevImportProjectFilesInput,
-) -> Result<Option<Vec<String>>, String> {
-    Err("移动端请使用系统附件选择器导入文件。".into())
 }
 
 #[tauri::command]
@@ -2586,7 +2544,6 @@ pub fn dev_import_project_drop(
 }
 
 #[tauri::command]
-#[cfg(not(any(target_os = "ios", target_os = "android")))]
 pub fn dev_import_project_folder(
     input: DevImportProjectFolderInput,
 ) -> Result<Option<String>, String> {
@@ -2606,15 +2563,6 @@ pub fn dev_import_project_folder(
 }
 
 #[tauri::command]
-#[cfg(any(target_os = "ios", target_os = "android"))]
-pub fn dev_import_project_folder(
-    _input: DevImportProjectFolderInput,
-) -> Result<Option<String>, String> {
-    Err("移动端不支持导入外部文件夹。".into())
-}
-
-#[tauri::command]
-#[cfg(not(any(target_os = "ios", target_os = "android")))]
 pub fn dev_export_project(input: DevExportProjectInput) -> Result<Option<String>, String> {
     let root = canonical_root(&input.root)?;
     let Some(destination) = rfd::FileDialog::new()
@@ -2625,12 +2573,6 @@ pub fn dev_export_project(input: DevExportProjectInput) -> Result<Option<String>
     };
     let destination = canonical_external_existing_path(&destination.to_string_lossy())?;
     Ok(Some(export_project_to_directory(&root, &destination)?))
-}
-
-#[tauri::command]
-#[cfg(any(target_os = "ios", target_os = "android"))]
-pub fn dev_export_project(_input: DevExportProjectInput) -> Result<Option<String>, String> {
-    Err("移动端请使用系统分享导出项目。".into())
 }
 
 #[tauri::command]
@@ -2818,6 +2760,65 @@ mod tests {
             std::fs::read_to_string(temp.path().join("note.md")).unwrap(),
             "external change"
         );
+    }
+
+    #[test]
+    fn atomic_replace_waits_for_a_temporary_windows_sharing_lock() {
+        use std::os::windows::fs::OpenOptionsExt;
+        let temp = tempfile::tempdir().unwrap();
+        let target = temp.path().join("scene.jcscene");
+        let pending = temp.path().join("scene.tmp");
+        std::fs::write(&target, "original").unwrap();
+        std::fs::write(&pending, "replacement").unwrap();
+        let handle = std::fs::OpenOptions::new().read(true).share_mode(3).open(&target).unwrap();
+        let release = std::thread::spawn(move || {
+            std::thread::sleep(std::time::Duration::from_millis(80));
+            drop(handle);
+        });
+        replace_file_atomically(&pending, &target).unwrap();
+        release.join().unwrap();
+        assert_eq!(std::fs::read_to_string(&target).unwrap(), "replacement");
+        assert!(!pending.exists());
+    }
+
+    #[test]
+    fn atomic_replace_preserves_both_files_when_a_windows_lock_persists() {
+        use std::os::windows::fs::OpenOptionsExt;
+        let temp = tempfile::tempdir().unwrap();
+        let target = temp.path().join("scene.jcscene");
+        let pending = temp.path().join("scene.tmp");
+        std::fs::write(&target, "original").unwrap();
+        std::fs::write(&pending, "replacement").unwrap();
+        let handle = std::fs::OpenOptions::new().read(true).share_mode(3).open(&target).unwrap();
+        assert!(replace_file_atomically(&pending, &target).is_err());
+        assert_eq!(std::fs::read_to_string(&target).unwrap(), "original");
+        assert_eq!(std::fs::read_to_string(&pending).unwrap(), "replacement");
+        drop(handle);
+    }
+
+    #[test]
+    fn conditional_save_rechecks_revision_after_waiting_for_a_windows_reader() {
+        use std::os::windows::fs::OpenOptionsExt;
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("scene.jcscene");
+        std::fs::write(&path, "original").unwrap();
+        let handle = std::fs::OpenOptions::new().read(true).share_mode(3).open(&path).unwrap();
+        let input = DevWriteFileIfRevisionInput {
+            root: temp.path().to_string_lossy().into(), relative_path: "scene.jcscene".into(),
+            content: "our edit".into(), expected_revision: resource_revision(&path).unwrap().value,
+        };
+        let writer = std::thread::spawn(move || dev_write_file_if_revision(input));
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(1);
+        while std::fs::read_dir(temp.path()).unwrap().count() == 1 {
+            assert!(std::time::Instant::now() < deadline, "writer did not stage its replacement");
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+        std::fs::write(&path, "external change during retry").unwrap();
+        drop(handle);
+        let result = writer.join().unwrap().unwrap();
+        assert_eq!(result.status, "conflict");
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "external change during retry");
+        assert_eq!(std::fs::read_dir(temp.path()).unwrap().count(), 1);
     }
 
     #[test]
@@ -3237,69 +3238,6 @@ mod tests {
         );
     }
 
-    #[cfg(unix)]
-    #[test]
-    fn desktop_drop_refuses_symlinked_sources_and_targets() {
-        use std::os::unix::fs::symlink;
-
-        let source_dir = tempfile::tempdir().unwrap();
-        let project = tempfile::tempdir().unwrap();
-        let outside = tempfile::tempdir().unwrap();
-        let source = source_dir.path().join("reference.pdf");
-        let source_link = source_dir.path().join("reference-link.pdf");
-        std::fs::write(&source, [1, 2, 3]).unwrap();
-        symlink(&source, &source_link).unwrap();
-
-        let source_error = match dev_import_project_drop(DevImportProjectDropInput {
-            root: project.path().to_string_lossy().to_string(),
-            source_paths: vec![source_link.to_string_lossy().to_string()],
-            target_relative_path: "jc-imports".into(),
-        }) {
-            Err(error) => error,
-            Ok(_) => panic!("symbolic-link source must be rejected"),
-        };
-        assert_eq!(source_error, "来源必须是普通文件");
-
-        symlink(outside.path(), project.path().join("jc-imports")).unwrap();
-        let target_error = match dev_import_project_drop(DevImportProjectDropInput {
-            root: project.path().to_string_lossy().to_string(),
-            source_paths: vec![source.to_string_lossy().to_string()],
-            target_relative_path: "jc-imports".into(),
-        }) {
-            Err(error) => error,
-            Ok(_) => panic!("symbolic-link target must be rejected"),
-        };
-        assert_eq!(target_error, "导入目标必须是项目内文件夹");
-        assert!(!outside.path().join("reference.pdf").exists());
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn project_search_skips_symlinks_outside_the_project() {
-        use std::os::unix::fs::symlink;
-
-        let project = tempfile::tempdir().unwrap();
-        let outside = tempfile::tempdir().unwrap();
-        std::fs::write(project.path().join("inside.md"), "inside").unwrap();
-        std::fs::write(outside.path().join("private.md"), "outside").unwrap();
-        symlink(outside.path(), project.path().join("external")).unwrap();
-
-        let entries = dev_search_project_paths(DevSearchProjectPathsInput {
-            root: project.path().to_string_lossy().to_string(),
-            query: "".into(),
-            limit: 20,
-        })
-        .unwrap();
-
-        assert_eq!(
-            entries
-                .iter()
-                .map(|entry| entry.path.as_str())
-                .collect::<Vec<_>>(),
-            vec!["inside.md"]
-        );
-    }
-
     #[test]
     fn importing_a_folder_keeps_its_top_level_name_without_overwriting() {
         let source_root = tempfile::tempdir().unwrap();
@@ -3356,26 +3294,6 @@ mod tests {
 
     // Windows 文件系统会剥掉名字的首尾空格：建 ` 东周 ` 实际落盘为 `东周`，
     // 因此“保留首尾空格”这个用例的前提在 Windows 上不成立。
-    #[cfg(not(windows))]
-    #[test]
-    fn trash_project_path_preserves_leading_and_trailing_spaces_in_names() {
-        let project = tempfile::tempdir().unwrap();
-        let uploaded = project.path().join(" 东周 ");
-        std::fs::create_dir_all(&uploaded).unwrap();
-        let root = std::fs::canonicalize(project.path()).unwrap();
-        let mut moved = None;
-
-        trash_project_path(&root, " 东周 ", |path| {
-            moved = Some(path.to_path_buf());
-            Ok(())
-        })
-        .unwrap();
-
-        assert_eq!(
-            moved.as_deref(),
-            Some(std::fs::canonicalize(&uploaded).unwrap().as_path())
-        );
-    }
 
     #[test]
     fn exporting_a_project_refuses_an_existing_or_nested_destination() {
@@ -3434,6 +3352,26 @@ mod tests {
         .unwrap();
         assert_eq!(replaced.replacements, 1);
         assert_eq!(std::fs::read_to_string(notes).unwrap(), "陆川");
+    }
+
+    #[test]
+    fn external_create_dir_is_idempotent_and_preserves_files() {
+        let temp = tempfile::tempdir().unwrap();
+        let directory = temp.path().join("harness/workspace");
+        let input = || DevExternalPathInput {
+            path: directory.to_string_lossy().to_string(),
+        };
+        dev_create_dir_external(input()).unwrap();
+        std::fs::write(directory.join("route.cordis.yml"), "preserve").unwrap();
+        dev_create_dir_external(input()).unwrap();
+        assert_eq!(std::fs::read_to_string(directory.join("route.cordis.yml")).unwrap(), "preserve");
+        assert!(dev_create_dir_external(DevExternalPathInput {
+            path: directory.join("route.cordis.yml").to_string_lossy().to_string(),
+        }).is_err());
+        assert!(dev_create_dir_external(DevExternalPathInput {
+            path: "relative/directory".into(),
+        }).is_err());
+        assert!(resolve_external_write_path(&directory.to_string_lossy()).is_err());
     }
 
     #[test]

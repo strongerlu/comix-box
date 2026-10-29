@@ -67,7 +67,7 @@ pub async fn plugin_read_manifest(install_dir: String) -> Result<String, String>
 #[tauri::command]
 pub async fn plugin_read_config() -> Result<String, String> {
     let home = dirs_next::home_dir().unwrap_or_else(|| std::path::PathBuf::from("."));
-    let config_path = home.join(".jiucaihezi").join("plugins.json");
+    let config_path = home.join(".comic-box").join("plugins.json");
     if !config_path.exists() {
         return Ok(r#"{"version":1,"plugins":[]}"#.to_string());
     }
@@ -77,7 +77,7 @@ pub async fn plugin_read_config() -> Result<String, String> {
 #[tauri::command]
 pub async fn plugin_write_config(content: String) -> Result<(), String> {
     let home = dirs_next::home_dir().unwrap_or_else(|| std::path::PathBuf::from("."));
-    let jc_dir = home.join(".jiucaihezi");
+    let jc_dir = home.join(".comic-box");
     std::fs::create_dir_all(&jc_dir).map_err(|e| format!("创建目录失败: {e}"))?;
     std::fs::write(jc_dir.join("plugins.json"), &content).map_err(|e| format!("写入失败: {e}"))
 }

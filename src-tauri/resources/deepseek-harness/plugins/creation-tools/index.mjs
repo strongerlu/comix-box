@@ -14,7 +14,7 @@ export const Config = z.object({
   capabilities: z.array(z.string()).default([]),
 })
 
-const discoveryPath = join(homedir(), '.jiucaihezi', 'mcp-bridge.json')
+const discoveryPath = join(homedir(), '.comic-box', 'mcp-bridge.json')
 const jsonOutput = {
   schema: { type: 'json' },
   render: (_args, value) => [{ type: 'text', text: JSON.stringify(value) ?? 'null' }],
@@ -50,12 +50,12 @@ async function invokeApp(operation, params) {
     // Each App owns its discovery file; the shared path is only for external clients.
     discovery = JSON.parse(await readFile(process.env.JIUCAIHEZI_BRIDGE_DISCOVERY || discoveryPath, 'utf8'))
   } catch (error) {
-    throw new Error(`请先启动韭菜盒子 Desktop：${error instanceof Error ? error.message : String(error)}`)
+    throw new Error(`请先启动COMIC-BOX Desktop：${error instanceof Error ? error.message : String(error)}`)
   }
   const address = new URL(String(discovery.address || ''))
   if (address.protocol !== 'http:' || address.hostname !== '127.0.0.1' || !address.port || address.username || address.password
     || typeof discovery.token !== 'string' || !discovery.token) {
-    throw new Error('韭菜盒子本机桥接地址无效')
+    throw new Error('COMIC-BOX本机桥接地址无效')
   }
   const response = await fetch(new URL('/v1/invoke', address), {
     method: 'POST',
@@ -70,9 +70,9 @@ async function invokeApp(operation, params) {
   try {
     body = await response.json()
   } catch {
-    throw new Error(`韭菜盒子本机桥接返回无效响应 (${response.status})`)
+    throw new Error(`COMIC-BOX本机桥接返回无效响应 (${response.status})`)
   }
-  if (!response.ok) throw new Error(body?.error || `韭菜盒子本机桥接请求失败 (${response.status})`)
+  if (!response.ok) throw new Error(body?.error || `COMIC-BOX本机桥接请求失败 (${response.status})`)
   return body?.result
 }
 
@@ -87,7 +87,7 @@ function registerCreationTool(ctx, name, description, parameters, execute) {
 }
 
 function registerCreationTools(ctx, allowPaid, mediaCatalog) {
-  registerCreationTool(ctx, 'get_creation_context', '读取当前韭菜盒子项目、画布和提交上下文。', {},
+  registerCreationTool(ctx, 'get_creation_context', '读取当前COMIC-BOX项目、画布和提交上下文。', {},
     () => invokeApp('get_creation_context', {}))
   registerCreationTool(ctx, 'add_creation_result_to_canvas', '把已保存的创作结果显式追加到当前画布。', {
     taskId: { type: 'string', required: true },
@@ -103,7 +103,7 @@ function registerCreationTools(ctx, allowPaid, mediaCatalog) {
     registerCreationTool(ctx, 'get_creation_model', '读取影音能力的参数 schema、素材槽位和版本；只按合同填写，不猜接口。', {
       modelId: { type: 'string', required: true }, revision: { type: 'string' },
     }, args => invokeApp('get_creation_model', { ...args, capabilities: ['av'] }))
-    registerCreationTool(ctx, 'get_creation_task', '查询韭菜盒子媒体任务的状态、进度和结果。', {
+    registerCreationTool(ctx, 'get_creation_task', '查询COMIC-BOX媒体任务的状态、进度和结果。', {
       taskId: { type: 'string', required: true },
     }, args => invokeApp('get_creation_task', args))
     registerCreationTool(ctx, 'list_creation_history', '分页读取创作面板中的媒体任务历史。', {

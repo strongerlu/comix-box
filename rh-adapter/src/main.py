@@ -374,7 +374,7 @@ async def get_task_status(task_id: str, ai_app: bool = False):
 
 
 # ── RH Native API proxy (for RH_CLI fork) ──
-# 韭菜盒子定制：RH_CLI fork 设置 RH_API_HOST 指向本服务后，
+# COMIC-BOX定制：RH_CLI fork 设置 RH_API_HOST 指向本服务后，
 # 所有 RH 原生 API 请求经此路由透传到 RunningHub，
 # 鉴权由服务器端 RUNNINGHUB_API_KEY 注入，用户无需自备 Key。
 

@@ -10,18 +10,12 @@ pub mod media;
 pub mod plugin;
 pub mod keep_awake;
 pub mod remote_bridge;
-pub mod remote_client;
 pub mod remote_relay;
 pub mod session;
 pub mod skill_material;
 pub mod tools;
 pub mod workspace;
-#[cfg(not(any(target_os = "ios", target_os = "android")))]
-pub mod desktop_update;
 
-#[cfg(any(target_os = "windows", target_os = "macos"))]
 pub mod screenshot;
-#[cfg(any(target_os = "windows", target_os = "macos"))]
 pub mod screenshot_capture;
-#[cfg(any(target_os = "windows", target_os = "macos"))]
 pub mod screenshot_geometry;

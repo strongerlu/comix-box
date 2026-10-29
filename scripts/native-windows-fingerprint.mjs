@@ -12,6 +12,6 @@ function walk(path) {
   }
 }
 for (const path of ['deepseek-harness', 'creation-mcp', 'skills', 'storyboarder']) walk(path)
-hashes['jiucaihezi-app.exe'] = createHash('sha256').update(readFileSync(packagedExecutable)).digest('hex')
+hashes['comic-box.exe'] = createHash('sha256').update(readFileSync(packagedExecutable)).digest('hex')
 writeFileSync(target, JSON.stringify(hashes))
 console.log(`Recorded ${Object.keys(hashes).length} native Windows runtime files`)

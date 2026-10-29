@@ -14,6 +14,7 @@ import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
 import { getItem, initDB, setItem } from '@/utils/idb'
 import { usesNewApiContentEndpoint } from '@/runtime/creation/creationMediaPlan'
+import { isUncertainSubmission, UNCERTAIN_SUBMISSION, type CreationRequestIdentity } from '@/runtime/creation/submissionSafety'
 import { getCreationModelSpec } from '@/runtime/creation/creationModelRegistry'
 import {
   CREATION_REFRESH_POLL_INTERVAL_MS,
@@ -231,6 +232,8 @@ export interface MediaTask {
   outputTasks?: Array<{ outputId: string; taskId: string; type: TaskMediaType }>
   planSnapshot?: CreationPlanSnapshot
   error?: CreationTaskError
+  creationRequest?: CreationRequestIdentity
+  submissionUncertain?: boolean
   // ─── 任务恢复字段 ───
   /** 上游服务返回的任务 ID */
   upstreamTaskId?: string
@@ -537,6 +540,7 @@ function requireWebCreationProjectId(
 }
 
 interface MediaTaskSubmitParams {
+  creationRequest?: CreationRequestIdentity
   type: TaskMediaType
   model: string
   modelLabel: string
@@ -884,6 +888,14 @@ export const useMediaTaskStore = defineStore('mediaTasks', () => {
       console.log('[JC] 创作结果已落地:', result.assetId)
       void persistTasksSafely('asset-localized')
     } catch (cause) {
+      // 公网上游直链连接失败时，复用已受理任务的鉴权成片接口；只取回，不重提交生成。
+      const detail = cause instanceof Error ? cause.message : String(cause)
+      if (!isTaskCancelled(task) && task.type === 'video' && task.upstreamTaskId
+        && taskUsesContentEndpoint(task) && isPublicUpstreamResultUrl(downloadUrl)
+        && retryableDownloadFailure(detail)) {
+        await downloadAndPersistMediaAsset(`${DEFAULT_API_BASE_URL}/v1/videos/${encodeURIComponent(task.upstreamTaskId)}/content`, task)
+        return
+      }
       // 这里只做归一化，然后一律上抛：失败状态只由 `completeMediaTask` 写。
       // 之前在这里吞掉异常并自己写一半状态（assetStatus / errorMsg），上层却按成功继续
       // （progressText=完成），于是产出「文件已在项目里、卡片却显示保存失败」的自相矛盾记录。
@@ -925,10 +937,12 @@ export const useMediaTaskStore = defineStore('mediaTasks', () => {
     if (!task.canvasTarget) return
     const webRuntime = !isTauriRuntime()
     const owner = webRuntime ? String(task.projectId || '').trim() : canvasTaskOwner(task)
+    const assetPath = task.assetUri?.replace(/\\/g, '/')
+    const ownerPath = owner?.replace(/\\/g, '/').replace(/\/+$/, '')
     const relativeAssetPath = webRuntime
       ? String(task.projectPath || '').trim()
-      : task.assetUri && owner && task.assetUri.startsWith(`${owner}/`)
-        ? task.assetUri.slice(owner.length + 1)
+      : assetPath && ownerPath && assetPath.startsWith(`${ownerPath}/`)
+        ? assetPath.slice(ownerPath.length + 1)
         : ''
     if (!owner || !relativeAssetPath) {
       markCanvasWriteUnwritten(task)
@@ -1160,12 +1174,17 @@ export const useMediaTaskStore = defineStore('mediaTasks', () => {
             _resumePolling(task).catch(() => {
               /* already handled internally */
             })
-          } else if (
-            task.source === 'creation' &&
-            task.planSnapshot &&
-            task.planSnapshot.pollKind !== 'none'
-          ) {
+          } else if (task.source === 'creation' && task.upstreamTaskId) {
             task.progressText = '等待恢复轮询元数据...'
+          } else if (task.source === 'creation') {
+            task.status = 'failed'
+            task.submissionUncertain = true
+            task.errorMsg = UNCERTAIN_SUBMISSION
+            task.progressText = '提交结果待核实'
+            task.error = { category: 'network', stage: 'submit', message: UNCERTAIN_SUBMISSION }
+            task.completedAt = Date.now()
+            markCanvasWriteUnwritten(task)
+            emitSettled(task)
           } else {
             // 没有上游 ID（可能是同步型任务如 gpt-image），标记失败
             task.status = 'failed'
@@ -1230,6 +1249,7 @@ export const useMediaTaskStore = defineStore('mediaTasks', () => {
     result: { taskId?: string; pollUrl?: string; pollKind?: 'image' | 'video' | 'audio' | 'text' },
   ): Promise<boolean> {
     if (result.taskId) task.upstreamTaskId = result.taskId
+    if (result.taskId) task.submissionUncertain = false
     if (result.pollUrl) task.pollUrl = result.pollUrl
     if (result.pollKind) task.pollKind = result.pollKind
     return persistTasksSafely('mark-submitted')
@@ -1253,13 +1273,6 @@ export const useMediaTaskStore = defineStore('mediaTasks', () => {
   }
 
   async function _resumePolling(task: MediaTask) {
-    const { beginDesktopUpdateTask } = await import('@/services/desktopUpdater')
-    const release = await beginDesktopUpdateTask('查询生成结果')
-    try { return await resumePollingAllowed(task) }
-    finally { await release() }
-  }
-
-  async function resumePollingAllowed(task: MediaTask) {
     if ((!task.pollUrl || !task.pollKind) && !task.planSnapshot?.protocol) return
     if (activeTaskIds.value.has(task.id)) return
     activeTaskIds.value.add(task.id)
@@ -1365,13 +1378,6 @@ export const useMediaTaskStore = defineStore('mediaTasks', () => {
   // ─── 提交任务 (单一入口) ───
   async function submitTask(params: MediaTaskSubmitParams): Promise<string> {
     const capturedProjectId = captureWebCreationProjectId(params)
-    const { beginDesktopUpdateTask } = await import('@/services/desktopUpdater')
-    const release = await beginDesktopUpdateTask('媒体生成')
-    try { return await submitTaskAllowed(params, release, capturedProjectId) }
-    catch (cause) { await release(); throw cause }
-  }
-
-  async function submitTaskAllowed(params: MediaTaskSubmitParams, release: () => Promise<void>, capturedProjectId: ReturnType<typeof captureWebCreationProjectId>): Promise<string> {
     await init()
     await validateTaskInputs(params)
     const projectId = requireWebCreationProjectId(params, capturedProjectId)
@@ -1395,6 +1401,7 @@ export const useMediaTaskStore = defineStore('mediaTasks', () => {
       progressText: '排队中...',
       createdAt: Date.now(),
       source: params.source,
+      creationRequest: params.creationRequest,
       projectId,
       assetStatus: projectId ? 'pending' : undefined,
       chatMessageId: params.chatMessageId,
@@ -1429,7 +1436,7 @@ export const useMediaTaskStore = defineStore('mediaTasks', () => {
     }
 
     // Fire-and-forget: 立刻开始执行
-    _executeTask(taskId, params).finally(release).catch(() => {
+    _executeTask(taskId, params).catch(() => {
       /* 错误已在内部处理 */
     })
 
@@ -1441,11 +1448,9 @@ export const useMediaTaskStore = defineStore('mediaTasks', () => {
     const task = tasks.value.find(item => item.id === taskId)
     if (!task?.planSnapshot?.protocol || !plan.protocol || isTaskActive(taskId)) return
     if (task.planSnapshot.protocol.fingerprint !== plan.protocol.fingerprint) throw new Error('恢复内容与原请求不一致')
-    const { beginDesktopUpdateTask } = await import('@/services/desktopUpdater')
-    const release = await beginDesktopUpdateTask('媒体生成')
     void _executeTask(task.id, { type: task.type, model: task.model, modelLabel: task.modelLabel,
       prompt: task.prompt, source: 'creation', directory: task.directory, memory: task.memory,
-      canvasTarget: task.canvasTarget, plan }).finally(release).catch(() => {})
+      canvasTarget: task.canvasTarget, plan }).catch(() => {})
   }
 
   async function cancelRemoteTask(taskId: string) {
@@ -1479,13 +1484,6 @@ export const useMediaTaskStore = defineStore('mediaTasks', () => {
   }
 
   async function retryMediaPersistence(taskId: string): Promise<boolean> {
-    const { beginDesktopUpdateTask } = await import('@/services/desktopUpdater')
-    const release = await beginDesktopUpdateTask('保存生成结果')
-    try { return await retryMediaPersistenceAllowed(taskId) }
-    finally { await release() }
-  }
-
-  async function retryMediaPersistenceAllowed(taskId: string): Promise<boolean> {
     const task = tasks.value.find(item => item.id === taskId)
     if (
       !task ||
@@ -1588,13 +1586,6 @@ export const useMediaTaskStore = defineStore('mediaTasks', () => {
   }
 
   async function refreshTaskResult(taskId: string): Promise<boolean> {
-    const { beginDesktopUpdateTask } = await import('@/services/desktopUpdater')
-    const release = await beginDesktopUpdateTask('查询生成结果')
-    try { return await refreshTaskResultAllowed(taskId) }
-    finally { await release() }
-  }
-
-  async function refreshTaskResultAllowed(taskId: string): Promise<boolean> {
     const task = tasks.value.find(item => item.id === taskId)
     if (!task || !canRefreshTaskResult(task) || activeTaskIds.value.has(task.id)) return false
     const controller = new AbortController()
@@ -1665,13 +1656,6 @@ export const useMediaTaskStore = defineStore('mediaTasks', () => {
   }
 
   async function addTaskResultToCanvas(taskId: string, target: CanvasTaskTarget): Promise<boolean> {
-    const { beginDesktopUpdateTask } = await import('@/services/desktopUpdater')
-    const release = await beginDesktopUpdateTask('写入画布')
-    try { return await addTaskResultToCanvasAllowed(taskId, target) }
-    finally { await release() }
-  }
-
-  async function addTaskResultToCanvasAllowed(taskId: string, target: CanvasTaskTarget): Promise<boolean> {
     const task = tasks.value.find(item => item.id === taskId)
     if (!task || task.source !== 'creation' || task.status !== 'success' || (task.type === 'model3d' || task.type === 'file'))
       return false
@@ -1915,7 +1899,8 @@ export const useMediaTaskStore = defineStore('mediaTasks', () => {
       task.errorMsg = (e.message || String(e)).slice(0, 200)
       task.error = classifyExecutionError(task, e)
       if (terminalFailure) task.error.stage = 'poll'
-      task.progressText = `失败: ${task.errorMsg}`
+      task.submissionUncertain = isUncertainSubmission(task)
+      task.progressText = task.submissionUncertain ? '提交结果待核实' : `失败: ${task.errorMsg}`
       task.completedAt = Date.now()
       markCanvasWriteUnwritten(task)
       console.error('[mediaTaskStore] _executeTask FAILED:', task.errorMsg)

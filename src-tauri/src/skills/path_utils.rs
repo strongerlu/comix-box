@@ -39,11 +39,11 @@ pub fn resolve_home_dir() -> PathBuf {
 }
 
 pub fn app_data_dir() -> PathBuf {
-    resolve_home_dir().join(".skillsmanage")
+    resolve_home_dir().join(".comic-box").join("skillsmanage")
 }
 
 pub fn central_skills_dir() -> PathBuf {
-    resolve_home_dir().join(".agents").join("skills")
+    resolve_home_dir().join(".comic-box").join("skills")
 }
 
 fn expand_home_path_with_home(path: &str, home_dir: &Path) -> PathBuf {

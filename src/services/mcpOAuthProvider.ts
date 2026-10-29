@@ -67,7 +67,7 @@ export function createMcpOAuthProvider(input: {
   if (!clientId) throw new Error(`MCP OAuth Client ID 未配置：${input.serverId}`)
   const redirectUrl = mcpOAuthRedirectUrl(input.serverId)
   const clientMetadata: OAuthClientMetadata = {
-    client_name: '韭菜盒子 Studio',
+    client_name: 'COMIC-BOX',
     redirect_uris: [redirectUrl],
     grant_types: ['authorization_code', 'refresh_token'],
     response_types: ['code'],

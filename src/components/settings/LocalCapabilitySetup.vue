@@ -18,7 +18,7 @@ const emit = defineEmits<{
   (e: 'close'): void
 }>()
 
-const capabilities = ref<Array<LocalCapability & { status: 'ready' | 'pending' | 'unavailable' }>>([])
+const capabilities = ref<Array<LocalCapability & { status: 'ready' | 'pending' | 'unavailable'; setupError?: string }>>([])
 const loading = ref(true)
 const isTauri = isTauriRuntime()
 
@@ -34,21 +34,24 @@ async function loadCapabilities() {
     result.push({
       ...c,
       status: ready ? 'ready' : isTauri ? 'pending' : 'unavailable',
+      setupError: undefined,
     })
   }
   capabilities.value = result
   loading.value = false
 }
 
-async function handleSetup(cap: LocalCapability & { status: string }) {
+async function handleSetup(cap: LocalCapability & { status: string; setupError?: string }) {
   cap.status = 'pending'
+  cap.setupError = undefined
   try {
     await cap.setup()
     // 重新检测
     const ready = await cap.check().catch(() => false)
     cap.status = ready ? 'ready' : 'unavailable'
-  } catch {
-    cap.status = 'unavailable'
+  } catch (error) {
+    cap.status = isTauri ? 'pending' : 'unavailable'
+    cap.setupError = error instanceof Error ? error.message : String(error)
   }
 }
 
@@ -99,6 +102,7 @@ onMounted(loadCapabilities)
                   <span v-if="cap.critical" class="lcs-critical">必需</span>
                 </div>
                 <div class="lcs-item-desc">{{ cap.description }}</div>
+                <div v-if="cap.setupError" class="lcs-item-error">{{ cap.setupError }}</div>
               </div>
               <div class="lcs-item-actions">
                 <button
@@ -132,7 +136,7 @@ onMounted(loadCapabilities)
     <!-- inline 模式：设置页内嵌 -->
     <div v-else class="lcs-inline">
       <h3>本地能力</h3>
-      <p class="lcs-subtitle">管理韭菜盒子的本地工具和权限</p>
+      <p class="lcs-subtitle">管理COMIC-BOX的本地工具和权限</p>
       <div v-if="loading" class="lcs-loading">检测中...</div>
       <div v-else class="lcs-list">
         <div v-for="cap in capabilities" :key="cap.id" class="lcs-item" :class="cap.status">
@@ -142,6 +146,7 @@ onMounted(loadCapabilities)
           <div class="lcs-item-info">
             <div class="lcs-item-name">{{ cap.name }}</div>
             <div class="lcs-item-desc">{{ cap.description }}</div>
+            <div v-if="cap.setupError" class="lcs-item-error">{{ cap.setupError }}</div>
           </div>
           <button
             v-if="cap.status === 'pending'"
@@ -205,6 +210,7 @@ onMounted(loadCapabilities)
 .lcs-item-info { flex: 1; min-width: 0; }
 .lcs-item-name { font-size: 13px; font-weight: 600; color: var(--ink1); display: flex; align-items: center; gap: 6px; }
 .lcs-item-desc { font-size: 11px; color: var(--ink3); margin-top: 2px; }
+.lcs-item-error { font-size: 11px; color: var(--danger, #c33); margin-top: 4px; }
 .lcs-critical {
   font-size: 9px; padding: 1px 5px; border-radius: 4px;
   background: rgba(229,57,53,.1); color: #e53935; font-weight: 700;

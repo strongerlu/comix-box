@@ -7,7 +7,9 @@ fn jiucaihezi_home_dir() -> Result<PathBuf, String> {
         .map(PathBuf::from)
         .filter(|path| path.is_dir())
         .ok_or_else(|| "无法读取用户目录".to_string())?;
-    Ok(home.join(".jiucaihezi"))
+    let directory = home.join(".comic-box");
+    std::fs::create_dir_all(&directory).map_err(|e| format!("创建 COMIC-BOX 用户目录失败: {e}"))?;
+    Ok(directory)
 }
 
 #[derive(Deserialize)]
@@ -16,29 +18,20 @@ pub(crate) struct WriteSessionTokenInput {
     token: String,
 }
 
-/// 从 ~/.jiucaihezi/.session 读取 session token（文件权限 0600，仅本用户可读）
+/// 从 ~/.comic-box/.session 读取 session token（文件权限 0600，仅本用户可读）
 #[tauri::command]
 pub fn read_session_token() -> Result<String, String> {
     let path = jiucaihezi_home_dir()?.join(".session");
     if !path.exists() {
         return Ok(String::new());
     }
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        if let Ok(meta) = std::fs::metadata(&path) {
-            let mode = meta.permissions().mode() & 0o777;
-            if mode != 0o600 {
-                let _ = std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600));
-            }
-        }
-    }
+
     std::fs::read_to_string(&path)
         .map(|s| s.trim().to_string())
         .map_err(|e| format!("读取 session token 失败: {}", e))
 }
 
-/// 将 session token 写入 ~/.jiucaihezi/.session（文件权限 0600），原子写入
+/// 将 session token 写入 ~/.comic-box/.session（文件权限 0600），原子写入
 #[tauri::command]
 pub fn write_session_token(input: WriteSessionTokenInput) -> Result<(), String> {
     let path = jiucaihezi_home_dir()?.join(".session");
@@ -51,11 +44,7 @@ pub fn write_session_token(input: WriteSessionTokenInput) -> Result<(), String> 
     }
     let tmp = path.with_extension(".session.tmp");
     std::fs::write(&tmp, &token).map_err(|e| format!("写入 session token 失败: {}", e))?;
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        let _ = std::fs::set_permissions(&tmp, std::fs::Permissions::from_mode(0o600));
-    }
+
     std::fs::rename(&tmp, &path).map_err(|e| format!("保存 session token 失败: {}", e))?;
     Ok(())
 }

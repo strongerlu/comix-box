@@ -3,7 +3,7 @@
  *
  * 唯一写入入口，职责：
  * 1. 接收 base64 字符串（或 Uint8Array）
- * 2. 解码写入 ~/.jiucaihezi/output/{source}/{YYYY-MM}/{assetId}.{ext}
+ * 2. 解码写入 ~/.comic-box/output/{source}/{YYYY-MM}/{assetId}.{ext}
  * 3. INSERT INTO media_assets
  * 4. 返回 assetId
  *

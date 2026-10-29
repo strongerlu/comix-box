@@ -13,7 +13,7 @@ interface McpOAuthIntent {
 }
 
 /**
- * 深链回调（jiucaihezi://mcp/oauth/callback）会落在新的 WebView 会话甚至新实例上，
+ * 深链回调（comic-box://mcp/oauth/callback）会落在新的 WebView 会话甚至新实例上，
  * 那里的 sessionStorage 是空的，会让 state 校验必然失败 —— 表现为"授权跳转回来了但永远连不上"。
  * localStorage 在同一 App 内跨会话持久共享，符合"授权从发起到回调"的真实生命周期。
  * 15 分钟 TTL 和用后即删（saveTokens / 失败分支）负责清理。
@@ -29,7 +29,7 @@ function randomState(): string {
 }
 
 export function prepareMcpOAuthIntent(serverId: string, storage: Storage | undefined = defaultStorage()): string {
-  const state = randomState()
+  const state = `comic-box_${randomState()}`
   storage?.setItem(MCP_OAUTH_INTENT_KEY, JSON.stringify({ serverId, state, createdAt: Date.now() }))
   return state
 }
@@ -72,7 +72,7 @@ export function consumeMcpOAuthCallbackUrl(input: {
 
   try {
     const url = new URL(input.href || globalThis.location?.href || '', 'tauri://localhost')
-    if (url.protocol !== 'jiucaihezi:' || url.hostname !== 'mcp' || url.pathname !== '/oauth/callback') return null
+    if (url.protocol !== 'comic-box:' || url.hostname !== 'mcp' || url.pathname !== '/oauth/callback') return null
     const raw = storage.getItem(MCP_OAUTH_INTENT_KEY)
     const intent = raw ? JSON.parse(raw) as McpOAuthIntent : null
     const serverId = String(url.searchParams.get('server') || '')

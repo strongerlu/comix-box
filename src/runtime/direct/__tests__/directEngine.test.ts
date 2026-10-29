@@ -123,7 +123,7 @@ test('runDirectChatCompletion performs a second pass when the model requests a t
   const sentMessages: any[][] = []
 
   const result = await runDirectChatCompletion({
-    messages: [{ role: 'user', content: '查一下韭菜盒子' }],
+    messages: [{ role: 'user', content: '查一下COMIC-BOX' }],
     tools: [{ type: 'function', function: { name: 'wiki_search' } }],
     onText: value => seen.push(value),
     executeTool: async call => ({
@@ -142,7 +142,7 @@ test('runDirectChatCompletion performs a second pass when the model requests a t
                     {
                       index: 0,
                       id: 'call_1',
-                      function: { name: 'wiki_search', arguments: '{"query":"韭菜盒子"}' },
+                      function: { name: 'wiki_search', arguments: '{"query":"COMIC-BOX"}' },
                     },
                   ],
                 },
@@ -162,13 +162,13 @@ test('runDirectChatCompletion performs a second pass when the model requests a t
   assert.equal(result.text, '搜索后回答')
   assert.deepEqual(seen, ['搜索后回答'])
   assert.equal(sentMessages.length, 2)
-  assert.deepEqual(sentMessages[0], [{ role: 'user', content: '查一下韭菜盒子' }])
+  assert.deepEqual(sentMessages[0], [{ role: 'user', content: '查一下COMIC-BOX' }])
   assert.equal(sentMessages[1][1].role, 'assistant')
   // 空串而不是 undefined：本地推理兼容层要求 assistant 的 content 必须是字符串。
   assert.equal(sentMessages[1][1].content, '')
   assert.equal(sentMessages[1][1].reasoning_content, '先查资料')
   assert.equal(sentMessages[1][2].role, 'tool')
-  assert.equal(sentMessages[1][2].content, '[result:韭菜盒子]')
+  assert.equal(sentMessages[1][2].content, '[result:COMIC-BOX]')
 })
 
 test('runDirectChatCompletion retries an empty final response after tools without exposing tools again', async () => {

@@ -10,7 +10,7 @@ const assetsRoot = path.join(gatewayRoot, 'assets');
 await rm(assetsRoot, { recursive: true, force: true });
 await mkdir(path.join(assetsRoot, 'landing'), { recursive: true });
 
-let homepage = await readFile(path.join(repoRoot, 'index.html'), 'utf8');
+let homepage = await readFile(path.join(gatewayRoot, 'site', 'index.html'), 'utf8');
 homepage = homepage
   .replaceAll('https://jiucaihezi.studio', 'https://api.jiucaihezi.studio')
   .replace('src="/logo.svg"', 'src="/landing/logo.svg"');
@@ -29,7 +29,7 @@ const embeddedHomepage = `<!doctype html>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <base href="https://api.jiucaihezi.studio/" />
-  <title>韭菜盒子Studio</title>
+  <title>COMIC-BOX</title>
   <style>
 ${styles}
     html, body { min-height: 100%; }

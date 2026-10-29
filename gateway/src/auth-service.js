@@ -127,7 +127,7 @@ async function findBrowserTokenId(env, request, tokenName) {
 
 export async function createDesktopManagedTokenKeyFromBrowserCookie(env, request) {
   const cookie = request.headers.get('Cookie') || request.headers.get('cookie') || '';
-  if (!cookie) throw unauthorized('请先在浏览器登录韭菜盒子账号');
+  if (!cookie) throw unauthorized('请先在浏览器登录COMIC-BOX账号');
 
   const tokenName = browserTokenName();
   const group = String(env.NEWAPI_AUTO_GROUP || env.NEWAPI_DEFAULT_GROUP || 'auto').trim() || 'auto';
@@ -147,7 +147,7 @@ export async function createDesktopManagedTokenKeyFromBrowserCookie(env, request
     })
   });
   if (createResponse.status === 401 || createResponse.status === 403) {
-    throw unauthorized('请先在浏览器登录韭菜盒子账号');
+    throw unauthorized('请先在浏览器登录COMIC-BOX账号');
   }
   const createPayload = await readJsonPayload(createResponse);
   if (!createResponse.ok || createPayload && createPayload.success === false) {
@@ -162,7 +162,7 @@ export async function createDesktopManagedTokenKeyFromBrowserCookie(env, request
     headers: withGatewaySecret(env, browserCookieHeaders(request, true))
   });
   if (keyResponse.status === 401 || keyResponse.status === 403) {
-    throw unauthorized('请先在浏览器登录韭菜盒子账号');
+    throw unauthorized('请先在浏览器登录COMIC-BOX账号');
   }
   const keyPayload = await readJsonPayload(keyResponse);
   if (!keyResponse.ok || keyPayload && keyPayload.success === false) {
@@ -440,13 +440,13 @@ export async function getSessionUser(request, env) {
 
 export async function requireWebUser(request, env) {
   const user = await getSessionUser(request, env);
-  if (!user || user.authProvider !== 'web') throw unauthorized('请重新登录韭菜盒子账号');
+  if (!user || user.authProvider !== 'web') throw unauthorized('请重新登录COMIC-BOX账号');
   return user;
 }
 
 export async function deleteLegacyWebAccount(env, user) {
   const userId = legacyUserIdFrom(user);
-  if (!userId) throw unauthorized('请重新登录韭菜盒子账号');
+  if (!userId) throw unauthorized('请重新登录COMIC-BOX账号');
   const headers = buildLegacyUserHeaders(userId, user.legacyAccessToken || '', false);
   if (user.legacySessionCookie) headers.Cookie = user.legacySessionCookie;
   const response = await fetch(`${legacyApiBase(env)}/api/user/self`, {
@@ -513,7 +513,7 @@ async function fetchLegacyTokenKeyById(env, userId, tokenId, accessToken) {
 }
 
 async function fetchOrCreateLegacyManagedTokenKey(env, userId, accessToken, targetGroup = 'auto') {
-  const tokenName = '韭菜盒子工作台';
+  const tokenName = 'COMIC-BOX工作台';
   const group = String(targetGroup || 'auto').trim() || 'auto';
   const listResponse = await fetch(`${legacyApiBase(env)}/api/token/?p=0&size=20`, {
     method: 'GET',

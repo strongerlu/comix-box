@@ -76,7 +76,7 @@ export function parseBackupPackage(input: string | unknown): JcBackupPackage {
     throw new Error('备份内容格式错误：顶层必须是对象')
   }
   if (parsed.app !== 'jiucaihezi' || parsed.kind !== 'web-backup') {
-    throw new Error('备份内容格式错误：不是韭菜盒子 Web 备份')
+    throw new Error('备份内容格式错误：不是COMIC-BOX Web 备份')
   }
   if (typeof parsed.version !== 'number' || !Number.isFinite(parsed.version)) {
     throw new Error('备份内容格式错误：缺少有效的版本号')

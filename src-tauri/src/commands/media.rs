@@ -161,6 +161,7 @@ pub fn truncate_markdown(content: String, max_chars: usize) -> (String, bool) {
 
 pub fn python_command_with_local_tools() -> Command {
     let mut command = Command::new(resolve_local_python());
+    super::tools::configure_background_command(command.as_std_mut());
     if let Some(python_path) = local_tools_python_path() {
         command.env("PYTHONPATH", python_path.to_string_lossy().to_string());
     }
@@ -213,7 +214,6 @@ fn document_markdown_body(content: &str) -> &str {
         .unwrap_or(content)
 }
 
-#[cfg(not(any(target_os = "ios", target_os = "android")))]
 pub(crate) fn map_anydoc_error(error: anydoc::ConvertError, is_pdf: bool) -> DocumentParseError {
     use anydoc::ConvertError;
 
@@ -246,7 +246,6 @@ pub(crate) fn map_anydoc_error(error: anydoc::ConvertError, is_pdf: bool) -> Doc
     }
 }
 
-#[cfg(not(any(target_os = "ios", target_os = "android")))]
 fn parse_document_markdown(bytes: &[u8], filename: &str) -> Result<String, DocumentParseError> {
     if bytes.len() > MAX_DOCUMENT_BYTES {
         return Err(document_parse_error(
@@ -277,7 +276,6 @@ fn parse_document_markdown(bytes: &[u8], filename: &str) -> Result<String, Docum
     Ok(decorate_document_markdown(bytes, &content))
 }
 
-#[cfg(not(any(target_os = "ios", target_os = "android")))]
 pub(crate) fn parse_document_bytes(
     bytes: &[u8],
     filename: &str,
@@ -445,7 +443,7 @@ pub fn markdown_to_simple_html(markdown: &str) -> String {
         }
     }
     format!(
-        "<!doctype html>\n<html lang=\"zh-CN\">\n<head><meta charset=\"utf-8\"><title>韭菜盒子转换</title></head>\n<body>\n{}</body>\n</html>\n",
+        "<!doctype html>\n<html lang=\"zh-CN\">\n<head><meta charset=\"utf-8\"><title>COMIC-BOX转换</title></head>\n<body>\n{}</body>\n</html>\n",
         body
     )
 }
@@ -646,7 +644,11 @@ pub async fn inspect_media_path(
 
     let output = timeout(
         Duration::from_secs(20),
-        Command::new(resolve_app_media_binary(app, "ffprobe")?)
+        {
+            let mut command = Command::new(resolve_app_media_binary(app, "ffprobe")?);
+            super::tools::configure_background_command(command.as_std_mut());
+            command
+        }
             .args([
                 "-v",
                 "error",
@@ -888,12 +890,12 @@ const WHISPER_MODEL_PREFERENCE: [&str; 6] = [
 
 pub(crate) fn whisper_model_dirs() -> Vec<PathBuf> {
     // HOME 在 Windows 上通常不存在，必须回退到 USERPROFILE，
-    // 否则 ~/.jiucaihezi/tools/whisper-models/ 里的模型永远发现不了。
+    // 否则 ~/.comic-box/tools/whisper-models/ 里的模型永远发现不了。
     let home = resolve_home_dir();
     let mut dirs = vec![
         home.join(".cache").join("whisper.cpp"),
-        home.join(".jiucaihezi").join("tools").join("whisper-models"),
-        home.join(".jiucaihezi").join("models").join("whisper"),
+        home.join(".comic-box").join("tools").join("whisper-models"),
+        home.join(".comic-box").join("models").join("whisper"),
     ];
     dirs.push(PathBuf::from("/opt/homebrew/share/whisper.cpp"));
     dirs.push(PathBuf::from("/usr/local/share/whisper.cpp"));
@@ -1021,7 +1023,6 @@ pub async fn convert_source_to_markdown(
         ));
     }
 
-    #[cfg(not(any(target_os = "ios", target_os = "android")))]
     {
         let permit = DOCUMENT_PARSE_PERMITS
             .acquire()
@@ -1063,11 +1064,6 @@ pub async fn convert_source_to_markdown(
         return Ok(conversion);
     }
 
-    #[cfg(any(target_os = "ios", target_os = "android"))]
-    Err(document_parse_error(
-        "unsupported",
-        "移动端请使用云端文档转换。",
-    ))
 }
 
 pub fn markdown_success_output(
@@ -1342,8 +1338,6 @@ pub async fn media_process_file(
     jobs: State<'_, MediaCaptureJobs>,
     input: MediaProcessFileInput,
 ) -> Result<MediaProcessFileOutput, String> {
-    #[cfg(not(any(target_os = "ios", target_os = "android")))]
-    let _update_task = super::desktop_update::native_task(&app, "媒体处理")?;
     let source = resolve_media_input_path(&app, &jobs, &input.input_path).await?;
     let output_dir = app_media_dir(&app, "media-outputs")?;
     let output_filename = sanitize_media_filename(&input.output_filename, "media-output.mp4");
@@ -1353,7 +1347,11 @@ pub async fn media_process_file(
 
     let output = timeout(
         Duration::from_secs(900),
-        Command::new(resolve_app_media_binary(&app, "ffmpeg")?)
+        {
+            let mut command = Command::new(resolve_app_media_binary(&app, "ffmpeg")?);
+            super::tools::configure_background_command(command.as_std_mut());
+            command
+        }
             .args(args)
             .kill_on_drop(true)
             .output(),
@@ -1436,6 +1434,7 @@ pub async fn media_transcribe_file(
             .or_else(|_| resolve_app_media_binary(&app, "whisper"))
             .map_err(|_| "媒体处理组件不可用，请重新安装应用后重试。".to_string())?
     });
+    super::tools::configure_background_command(command.as_std_mut());
     command
         .arg("-m")
         .arg(&model_path)
@@ -1497,8 +1496,6 @@ pub async fn media_burn_subtitles(
     jobs: State<'_, MediaCaptureJobs>,
     input: MediaBurnSubtitlesInput,
 ) -> Result<MediaProcessFileOutput, String> {
-    #[cfg(not(any(target_os = "ios", target_os = "android")))]
-    let _update_task = super::desktop_update::native_task(&app, "字幕烧录")?;
     let source = resolve_media_input_path(&app, &jobs, &input.input_path).await?;
     let subtitle_text = input.subtitle_text.trim();
     if subtitle_text.is_empty() {
@@ -1532,7 +1529,11 @@ pub async fn media_burn_subtitles(
 
     let output = timeout(
         Duration::from_secs(900),
-        Command::new(resolve_app_media_binary(&app, "ffmpeg")?)
+        {
+            let mut command = Command::new(resolve_app_media_binary(&app, "ffmpeg")?);
+            super::tools::configure_background_command(command.as_std_mut());
+            command
+        }
             .args([
                 "-y",
                 "-hide_banner",
@@ -1586,6 +1587,8 @@ pub struct MediaConcatVideosInput {
     /// 每段计划时长（秒）：视频模型按时长档位向上取整，拼接时裁掉多出来的尾巴。
     pub durations: Vec<f64>,
     pub output_path: String,
+    #[serde(default)]
+    pub normalize: bool,
 }
 
 /// ffmpeg concat demuxer 列表；路径中的单引号按 concat 语法转义。
@@ -1603,7 +1606,53 @@ pub fn build_concat_list(inputs: &[String], durations: &[f64]) -> Result<String,
     Ok(list)
 }
 
-/// 漫剧全自动成片：按片段顺序无损拼接（-c copy），同一模型同参数出片编码一致。
+/// 首帧续接可以切换工作流，统一为首段画幅、24fps、48k双声道后拼接。
+fn normalized_concat_filter(width: u64, height: u64, durations: &[f64], audio: &[bool]) -> Result<String, String> {
+    if width < 2 || height < 2 || width % 2 != 0 || height % 2 != 0 || durations.is_empty() || durations.len() != audio.len()
+        || durations.iter().any(|d| !d.is_finite() || *d <= 0.0) {
+        return Err("续接拼接参数无效".into());
+    }
+    let mut filters = Vec::new();
+    let mut streams = String::new();
+    for (i, duration) in durations.iter().enumerate() {
+        filters.push(format!("[{i}:v:0]trim=duration={duration:.6},setpts=PTS-STARTPTS,scale={width}:{height}:force_original_aspect_ratio=decrease,pad={width}:{height}:(ow-iw)/2:(oh-ih)/2,setsar=1,fps=24,format=yuv420p[v{i}]"));
+        let source = if audio[i] { format!("[{i}:a:0]") } else { "anullsrc=r=48000:cl=stereo,".into() };
+        filters.push(format!("{source}atrim=duration={duration:.6},asetpts=PTS-STARTPTS,aresample=48000,aformat=channel_layouts=stereo[a{i}]"));
+        streams.push_str(&format!("[v{i}][a{i}]"));
+    }
+    filters.push(format!("{streams}concat=n={}:v=1:a=1[v][a]", durations.len()));
+    Ok(filters.join(";"))
+}
+
+async fn normalized_concat(app: &tauri::AppHandle, input: &MediaConcatVideosInput) -> Result<String, String> {
+    // 共用原来的数量、时长及路径格式校验。
+    build_concat_list(&input.inputs, &input.durations)?;
+    let mut dimensions = (0, 0);
+    let mut audio = Vec::new();
+    for (i, path) in input.inputs.iter().enumerate() {
+        let mut probe = Command::new(resolve_app_media_binary(app, "ffprobe")?);
+        super::tools::configure_background_command(probe.as_std_mut());
+        let result = timeout(Duration::from_secs(30), probe.args(["-v", "error", "-show_streams", "-of", "json"]).arg(path).kill_on_drop(true).output()).await
+            .map_err(|_| "读取片段格式超时".to_string())?.map_err(|_| "无法读取片段格式".to_string())?;
+        if !result.status.success() { return Err("片段格式读取失败，未拼接".into()); }
+        let metadata: serde_json::Value = serde_json::from_slice(&result.stdout).map_err(|_| "片段格式信息无效".to_string())?;
+        let streams = metadata["streams"].as_array().ok_or("片段缺少视频流")?;
+        let video = streams.iter().find(|s| s["codec_type"] == "video").ok_or("片段缺少视频流")?;
+        if i == 0 { dimensions = (video["width"].as_u64().unwrap_or(0), video["height"].as_u64().unwrap_or(0)); }
+        audio.push(streams.iter().any(|s| s["codec_type"] == "audio"));
+    }
+    let filter = normalized_concat_filter(dimensions.0, dimensions.1, &input.durations, &audio)?;
+    let mut command = Command::new(resolve_app_media_binary(app, "ffmpeg")?);
+    super::tools::configure_background_command(command.as_std_mut());
+    command.args(["-y", "-hide_banner"]);
+    for path in &input.inputs { command.arg("-i").arg(path); }
+    let result = timeout(Duration::from_secs(900), command.args(["-filter_complex", &filter, "-map", "[v]", "-map", "[a]", "-c:v", "libx264", "-crf", "18", "-pix_fmt", "yuv420p", "-c:a", "aac", "-movflags", "+faststart"]).arg(&input.output_path).kill_on_drop(true).output()).await
+        .map_err(|_| "续接拼接超时".to_string())?.map_err(|_| "无法启动续接拼接".to_string())?;
+    if !result.status.success() { return Err(format!("续接拼接失败：{}", sanitize_media_process_error(String::from_utf8_lossy(&result.stderr).trim(), "请检查片段"))); }
+    Ok(input.output_path.clone())
+}
+
+/// 漫剧全自动成片：默认按片段顺序复制拼接；显式续接模式先统一视频与音轨格式。
 #[tauri::command]
 pub async fn media_concat_videos(app: tauri::AppHandle, input: MediaConcatVideosInput) -> Result<String, String> {
     for path in &input.inputs {
@@ -1618,12 +1667,17 @@ pub async fn media_concat_videos(app: tauri::AppHandle, input: MediaConcatVideos
     if let Some(parent) = output.parent() {
         std::fs::create_dir_all(parent).map_err(|e| format!("创建成片目录失败: {}", e))?;
     }
+    if input.normalize { return normalized_concat(&app, &input).await; }
     let list_path = std::env::temp_dir().join(format!("jc-concat-{}.txt", uuid::Uuid::new_v4()));
     std::fs::write(&list_path, build_concat_list(&input.inputs, &input.durations)?)
         .map_err(|e| format!("写入拼接列表失败: {}", e))?;
     let result = timeout(
         Duration::from_secs(900),
-        Command::new(resolve_app_media_binary(&app, "ffmpeg")?)
+        {
+            let mut command = Command::new(resolve_app_media_binary(&app, "ffmpeg")?);
+            super::tools::configure_background_command(command.as_std_mut());
+            command
+        }
             .args(["-y", "-hide_banner", "-f", "concat", "-safe", "0", "-i"])
             .arg(&list_path)
             .args(["-c", "copy"])
@@ -1645,7 +1699,18 @@ pub async fn media_concat_videos(app: tauri::AppHandle, input: MediaConcatVideos
 
 #[cfg(test)]
 mod concat_tests {
-    use super::build_concat_list;
+    use super::{build_concat_list, normalized_concat_filter};
+
+    #[test]
+    fn continuation_concat_normalizes_frames_and_handles_missing_audio() {
+        let graph = normalized_concat_filter(854, 480, &[8.0, 8.0], &[true, false]).unwrap();
+        assert!(graph.contains("scale=854:480"));
+        assert!(graph.contains("fps=24"));
+        assert!(graph.contains("anullsrc=r=48000:cl=stereo"));
+        assert!(graph.ends_with("concat=n=2:v=1:a=1[v][a]"));
+        assert!(normalized_concat_filter(853, 480, &[8.0], &[true]).is_err());
+    }
+
 
     #[test]
     fn concat_list_trims_each_segment_and_escapes_quotes() {
@@ -1658,5 +1723,104 @@ mod concat_tests {
         assert!(build_concat_list(&["/a.mp4".into()], &[]).is_err());
         assert!(build_concat_list(&[], &[]).is_err());
         assert!(build_concat_list(&["/a.mp4".into()], &[0.0]).is_err());
+    }
+}
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MediaReviewVideoInput {
+    input_path: String,
+    action: String,
+    end_seconds: Option<f64>,
+    brightness: Option<f64>,
+    contrast: Option<f64>,
+    saturation: Option<f64>,
+    warmth: Option<f64>,
+    volume: Option<f64>,
+}
+
+fn review_filters(input: &MediaReviewVideoInput) -> Result<(String, f64), String> {
+    let bounded = |value: Option<f64>, default: f64, min: f64, max: f64| -> Result<f64, String> {
+        let value = value.unwrap_or(default);
+        if !value.is_finite() || value < min || value > max { return Err("本地调整参数超出范围".into()); }
+        Ok(value)
+    };
+    let brightness = bounded(input.brightness, 0.0, -1.0, 1.0)?;
+    let contrast = bounded(input.contrast, 1.0, 0.1, 3.0)?;
+    let saturation = bounded(input.saturation, 1.0, 0.0, 3.0)?;
+    let warmth = bounded(input.warmth, 0.0, -1.0, 1.0)? * 0.15;
+    let volume = bounded(input.volume, 1.0, 0.0, 3.0)?;
+    Ok((format!("eq=brightness={brightness}:contrast={contrast}:saturation={saturation},colorbalance=rs={warmth}:bs={}", -warmth), volume))
+}
+
+fn tail_frame_seconds(planned: f64, actual: f64, fps: f64) -> Result<f64, String> {
+    if !planned.is_finite() || planned <= 0.0 || !actual.is_finite() || actual <= 0.0 || !fps.is_finite() || fps <= 0.0 {
+        return Err("无法确定片段末帧时间".into());
+    }
+    Ok((planned.min(actual) - 1.0 / fps).max(0.0))
+}
+
+/// 审片后的本地派生版本：只处理当前窗口项目生成的视频或应用自身派生视频，不覆盖原件。
+#[tauri::command]
+pub async fn media_review_video(app: tauri::AppHandle, window: tauri::WebviewWindow, jobs: State<'_, MediaCaptureJobs>, input: MediaReviewVideoInput) -> Result<String, String> {
+    let root = super::workspace::workspace_for_window(window.label()).ok_or("请先打开项目")?;
+    let media_root = std::fs::canonicalize(Path::new(&root).join(".raw/jc-media")).map_err(|_| "项目尚无生成的视频目录")?;
+    let source = validate_selected_media_path(&input.input_path)?;
+    let derived_root = app_media_dir(&app, "media-outputs")?;
+    let derived_root = std::fs::canonicalize(derived_root).map_err(|_| "无法读取媒体输出目录")?;
+    if !source.starts_with(&media_root) && !source.starts_with(&derived_root) { return Err("只能处理当前项目生成的视频或本地处理版本".into()); }
+    if !matches!(source.extension().and_then(|ext| ext.to_str()), Some("mp4" | "mov" | "webm" | "mkv")) { return Err("请选择视频文件".into()); }
+    let output = derived_root.join(unique_media_filename(if input.action == "tail_frame" { "tail.png" } else { "adjusted.mp4" }));
+    let mut args: Vec<String> = vec!["-y".into(), "-hide_banner".into(), "-i".into(), source.to_string_lossy().to_string()];
+    if input.action == "tail_frame" {
+        let probe = timeout(Duration::from_secs(30), {
+            let mut command = Command::new(resolve_app_media_binary(&app, "ffprobe")?);
+            super::tools::configure_background_command(command.as_std_mut());
+            command.args(["-v", "error", "-select_streams", "v:0", "-show_entries", "format=duration:stream=avg_frame_rate", "-of", "json"]).arg(&source).kill_on_drop(true).output()
+        }).await.map_err(|_| "视频元数据读取超时")?.map_err(|_| "无法读取视频元数据")?;
+        if !probe.status.success() { return Err("无法读取视频元数据".into()); }
+        let data: serde_json::Value = serde_json::from_slice(&probe.stdout).map_err(|_| "视频元数据无效")?;
+        let actual = data["format"]["duration"].as_str().and_then(|v| v.parse::<f64>().ok()).ok_or("视频时长缺失")?;
+        let fps = data["streams"][0]["avg_frame_rate"].as_str().and_then(parse_fps).ok_or("视频帧率缺失")?;
+        let seconds = tail_frame_seconds(input.end_seconds.ok_or("需要片段计划时长")?, actual, fps)?;
+        args.extend(["-ss".into(), format!("{seconds:.9}"), "-frames:v".into(), "1".into(), "-update".into(), "1".into(), "-an".into()]);
+    } else if input.action == "adjust" {
+        let (filter, volume) = review_filters(&input)?;
+        args.extend(["-map".into(), "0:v:0".into(), "-map".into(), "0:a?".into(), "-vf".into(), filter, "-c:v".into(), "libx264".into(), "-pix_fmt".into(), "yuv420p".into(), "-crf".into(), "18".into()]);
+        if volume == 1.0 { args.extend(["-c:a".into(), "copy".into()]); }
+        else { args.extend(["-af".into(), format!("volume={volume}"), "-c:a".into(), "aac".into()]); }
+        args.extend(["-movflags".into(), "+faststart".into()]);
+    } else { return Err("未知本地视频处理动作".into()); }
+    args.push(output.to_string_lossy().to_string());
+    let result = timeout(Duration::from_secs(900), {
+        let mut command = Command::new(resolve_app_media_binary(&app, "ffmpeg")?);
+        super::tools::configure_background_command(command.as_std_mut());
+        command.args(args).kill_on_drop(true).output()
+    }).await.map_err(|_| "本地视频处理超时")?.map_err(|_| "无法启动媒体处理组件")?;
+    if !result.status.success() || !output.is_file() { return Err("本地视频处理失败，原视频已保留".into()); }
+    jobs.allow_output(&output).await?;
+    Ok(output.to_string_lossy().to_string())
+}
+
+#[cfg(test)]
+mod review_tests {
+    use super::*;
+    #[test]
+    fn tail_uses_trimmed_duration_and_actual_frame_rate() {
+        assert!((tail_frame_seconds(13.0, 15.0, 24.0).unwrap() - (13.0 - 1.0 / 24.0)).abs() < 1e-9);
+        assert!((tail_frame_seconds(15.0, 8.0, 30.0).unwrap() - (8.0 - 1.0 / 30.0)).abs() < 1e-9);
+        assert!(tail_frame_seconds(f64::NAN, 8.0, 24.0).is_err());
+        assert!(tail_frame_seconds(8.0, 8.0, 0.0).is_err());
+    }
+    #[test]
+    fn local_adjustments_reject_invalid_values_and_preserve_neutral_defaults() {
+        let mut input: MediaReviewVideoInput = serde_json::from_str(r#"{"inputPath":"x","action":"adjust"}"#).unwrap();
+        let (filter, volume) = review_filters(&input).unwrap();
+        assert!(filter.starts_with("eq=brightness=0:contrast=1:saturation=1"));
+        assert_eq!(volume, 1.0);
+        input.brightness = Some(f64::NAN);
+        assert!(review_filters(&input).is_err());
+        input.brightness = Some(0.0); input.volume = Some(-1.0);
+        assert!(review_filters(&input).is_err());
     }
 }

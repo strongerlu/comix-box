@@ -35,7 +35,16 @@
       </label>
       <div class="manju-auto-row"><span>比例</span><span>{{ draft.ratio }}（项目风格已确认）</span></div>
       <div class="manju-auto-row"><span>模型限制</span><span>每段 ≤{{ limits.max_seconds }} 秒{{ limits.allowed_seconds ? `（只支持 ${limits.allowed_seconds.join('/')} 秒）` : '' }}{{ limits.max_refs === 0 ? '，纯文生不用参考图' : limits.max_refs ? `，最多 ${limits.max_refs} 张参考图` : '' }}；写提示词时按此分段</span></div>
+      <p v-if="profileLoading" class="manju-auto-note">正在读取所选模型的完整能力…</p>
+      <p v-else-if="profileError || profileIssue" class="manju-auto-warn">{{ profileError || profileIssue }}</p>
+      <button v-if="profileError" type="button" @click="profileNonce++">重新读取模型能力</button>
+      <p v-else-if="videoProfile" class="manju-auto-note">{{ videoProfile.source === 'catalog' ? '能力来自服务端目录' : '能力来自现有模型登记' }} · {{ videoProfile.firstFrame ? '声明支持首帧模式，审片时按参考图兼容情况绑定' : '未声明首帧约束，普通参考图仅用于外观参考' }}</p>
       <template v-if="film">
+      <label class="manju-auto-row"><span>跨段续接</span>
+        <select v-model="continuationModelId"><option value="">普通参考生成（各段独立）</option><option v-for="model in draft.videoModels" :key="model.id" :value="model.id">{{ model.label }}</option></select>
+      </label>
+      <p v-if="continuationModelId" class="manju-auto-note">按分段关系选择输入：同一镜头动作接续时，等待上一段完成并使用切点尾帧；切镜、换场景使用上面的视频模型与各自参考素材。旧进度未标关系时沿用原续接设置，已生成段保留。首帧专用接口只上传尾帧，原参考图保留在项目中。接续段按续接型号计费，拼接时统一画幅与帧率。</p>
+      <p v-if="continuationError" class="manju-auto-warn">{{ continuationError }}</p>
       <label class="manju-auto-row"><span>单集预算</span><span><input v-model="budget" type="number" min="0" step="1" placeholder="不限"> 元</span></label>
       <label v-if="!pureText" class="manju-auto-row"><span>审图</span>
         <select v-model="reviewMode">
@@ -51,6 +60,7 @@
         </select>
       </label>
       <p class="manju-auto-note">{{ priceNote }}</p>
+      <p class="manju-auto-note">提交前检查剧本、素材和参考图顺序。建议保留审图与审片，重点检查角色数量、动作和镜头连续性；只重做不满意的片段。</p>
       </template>
       <p v-else class="manju-auto-note">只写项目资料、资产提示词和视频提示词，不生图也不生视频；视频模型只用来确定每段时长与参考图上限。写完后可切到「全自动·到成片」，已写好的集直接复用。</p>
     </template>
@@ -66,7 +76,8 @@
     <p>不满意的图可以单独「重新生成」或「改提示词」后重生成，其他图不受影响。确认后全部锁定，后续各集直接复用。</p>
     <div class="manju-auto-images">
       <figure v-for="id in review.ids" :key="id" :class="{ busy: reviewBusy[id] }">
-        <img :src="displaySrc(review.images[id])" :alt="id">
+        <img v-if="review.images[id]" :src="displaySrc(review.images[id])" :alt="id">
+        <p v-else class="manju-auto-warn">尚未取得图片</p>
         <span v-if="reviewBusy[id]" class="manju-auto-busy">生成中…</span>
         <figcaption>{{ id }}</figcaption>
         <div class="manju-auto-image-actions">
@@ -79,30 +90,37 @@
     <div v-if="editingId" class="manju-auto-prompt-editor">
       <span>修改「{{ editingId }}」的提示词（保存后写回 Wiki 并重新生成）</span>
       <textarea v-model="editingText" rows="6" :disabled="loadingPrompt" />
+      <small v-if="promptError" class="manju-auto-image-error">{{ promptError }}</small>
       <div class="manju-auto-actions">
-        <button type="button" @click="editingId = ''">取消</button>
-        <button type="button" class="primary" :disabled="loadingPrompt || !editingText.trim()" @click="savePrompt">保存并重新生成</button>
+        <button v-if="promptError" type="button" @click="openPromptEditor(editingId!)">重新读取</button>
+        <button type="button" @click="promptEditor.close()">取消</button>
+        <button type="button" class="primary" :disabled="!canSavePrompt || anyBusy" @click="savePrompt">保存并重新生成</button>
       </div>
     </div>
     <div class="manju-auto-actions">
       <button type="button" @click="emit('stop')">停止</button>
-      <button type="button" class="primary" :disabled="anyBusy" :title="anyBusy ? '等重新生成的图出来再确认' : ''" @click="emit('approve')">确认并继续</button>
+      <button type="button" class="primary" :disabled="anyBusy || missingImages || Object.values(reviewErrors).some(Boolean)" :title="missingImages ? '补齐图片后再确认' : anyBusy ? '等重新生成的图出来再确认' : ''" @click="emit('approve')">确认并继续</button>
     </div>
   </div>
 
   <div v-if="cutReview" class="manju-auto-card manju-auto-review" role="dialog" aria-label="审核视频片段">
     <strong>审核第 {{ cutReview.episode }} 集视频片段</strong>
+    <p>检查剧情因果、人物与道具、跨镜空间、动作完成与结尾、声画同步。确认表示你已人工检查本次视频；生成或拼接完成不代表画面验收通过。</p>
     <p>逐段看一遍。剧情、表演、镜头有问题就在段下写修改意见，点「按修改意见重做本集」：先改工程剧本，再重写受影响的视频提示词，只重出改动过的段。只想换个画面效果，可以对单段「重新生成」或「改提示词」（沿用原参考图与时长）。确认后拼接成片。</p>
     <div class="manju-auto-images manju-auto-videos">
       <figure v-for="(video, index) in cutReview.videos" :key="index" :class="{ busy: reviewBusy[String(index)] }">
-        <video :src="displaySrc(video)" controls preload="metadata" />
-        <span v-if="reviewBusy[String(index)]" class="manju-auto-busy">生成中…</span>
+        <video v-if="video" :src="displaySrc(video)" controls preload="metadata" />
+        <p v-else class="manju-auto-warn">尚未取得视频</p>
+        <span v-if="reviewBusy[String(index)]" class="manju-auto-busy">处理中…</span>
         <figcaption>第 {{ index + 1 }} 段<em v-if="cutReview.revised?.includes(index)" class="manju-auto-revised">已按意见重做</em></figcaption>
         <div class="manju-auto-image-actions">
-          <button type="button" :disabled="reviewBusy[String(index)] || reviewBusy.revise" @click="emit('regenerateSegment', index)">重新生成</button>
-          <button type="button" :disabled="reviewBusy[String(index)] || reviewBusy.revise" @click="openSegmentEditor(index)">改提示词</button>
+          <button type="button" :disabled="anyBusy" @click="emit('regenerateSegment', index)">重新生成</button>
+          <button type="button" :disabled="anyBusy" @click="openSegmentEditor(index)">改提示词</button>
         </div>
-        <textarea v-model="notes[index + 1]" class="manju-auto-note-input" rows="2" placeholder="这一段的修改意见（可不填）" :disabled="reviewBusy.revise" />
+        <SegmentReviewTools :key="`${cutReview.episode}:${index}`" :label="`第 ${index + 1} 段`" :video="video" :versions="cutReview.versions?.[index] || []" :busy="anyBusy"
+          :can-bind="cutReview.firstFrameAvailable?.[index] || false" :frame-bound="Boolean(cutReview.frameBindings?.[index])" :review="cutReview.notes?.[index]"
+          :previous-ready="index > 0 && Boolean(cutReview.videos[index - 1])" :frame-preview="cutReview.framePreviews?.[index]"
+          @note="review => recordNote(index, review)" @adopt="id => emit('restoreVersion', index, id)" @bind="emit('bindFrame', index)" @preview-frame="emit('previewFrame', index)" @process="adjustments => emit('processSegment', index, adjustments)" />
         <small v-if="reviewErrors[String(index)]" class="manju-auto-image-error">{{ reviewErrors[String(index)] }}</small>
       </figure>
     </div>
@@ -111,26 +129,28 @@
     <small v-if="reviewErrors.revise" class="manju-auto-image-error">按意见重做没有完成：{{ reviewErrors.revise }}</small>
     <div v-if="editingSegment !== null" class="manju-auto-prompt-editor">
       <span>修改第 {{ editingSegment + 1 }} 段的视频提示词（保存后写回 Wiki 并重新生成这一段）</span>
-      <textarea v-model="editingText" rows="8" :disabled="loadingPrompt" />
+      <textarea v-model="segmentText" rows="8" :disabled="loadingSegment" />
+      <small v-if="segmentError" class="manju-auto-image-error">{{ segmentError }}</small>
       <div class="manju-auto-actions">
-        <button type="button" @click="editingSegment = null">取消</button>
-        <button type="button" class="primary" :disabled="loadingPrompt || !editingText.trim()" @click="saveSegmentPrompt">保存并重新生成</button>
+        <button v-if="segmentError" type="button" @click="openSegmentEditor(editingSegment)">重新读取</button>
+        <button type="button" @click="segmentEditor.close()">取消</button>
+        <button type="button" class="primary" :disabled="!canSaveSegment || anyBusy" @click="saveSegmentPrompt">保存并重新生成</button>
       </div>
     </div>
     <div class="manju-auto-actions">
       <button type="button" @click="emit('stop')">停止</button>
       <button type="button" :disabled="anyBusy || !hasNotes" :title="hasNotes ? '改动的段会重新出片并计费，未改动的段不重出' : '先在段下或整集写修改意见'" @click="reviseEpisode">按修改意见重做本集</button>
-      <button type="button" class="primary" :disabled="anyBusy" :title="anyBusy ? '等重新生成的片段出来再确认' : ''" @click="emit('approveCut')">确认并拼接</button>
+      <button type="button" class="primary" :disabled="anyBusy || cutReview.videos.some(video => !video) || Object.values(reviewErrors).some(Boolean)" :title="anyBusy ? '等重新生成的片段出来再确认' : ''" @click="emit('approveCut')">确认并拼接</button>
     </div>
   </div>
 
   <div v-if="run" class="manju-auto-progress" :class="run.status">
     <JcIcon name="movie" />
     <span class="manju-auto-status">{{ statusLabel }}</span>
-    <span v-for="(episode, key) in run.episodes" :key="key" class="manju-auto-chip" :class="episode.phase" :title="episode.reason || episode.output || ''">第{{ key }}集 {{ phaseLabels[episode.phase] }}</span>
+    <span v-for="(episode, key) in run.episodes" :key="key" class="manju-auto-chip" :class="episode.phase" :title="episode.reason || episode.output || ''">第{{ key }}集 {{ episode.phase === 'done' ? completedEpisodeLabel(episode, run.config) : phaseLabels[episode.phase] }}</span>
     <button v-if="run.status === 'running'" type="button" :disabled="stopping" :title="stopping ? '正在写的提示词或正在上传的视频结束后停下；已提交的生成任务继续在后台完成' : ''" @click="emit('stop')">{{ stopping ? '停止中…' : '停止' }}</button>
     <p v-for="(episode, key) in blockedEpisodes" :key="`reason-${key}`" class="manju-auto-reason">第{{ key }}集暂停原因：{{ episode.reason }}</p>
-    <button v-if="formalEpisodes.length" type="button" title="沿用已定稿的项目资料、资产图和工程剧本，只按 Seedance 重写视频提示词并出片；开始前在确认卡上确认费用" @click="emit('formal', formalEpisodes)">用 Seedance 出正式版</button>
+    <button v-if="formalEpisodes.length" type="button" title="沿用项目资料、资产图和工程剧本，按 Seedance 重写视频提示词并出片；开始前在确认卡上确认费用，新视频仍需审片" @click="emit('formal', formalEpisodes)">用 Seedance 另出一版</button>
     <p v-if="run.status === 'blocked' || run.status === 'stopped'" class="manju-auto-reason">处理后从「漫剧制作」菜单重新选「{{ runFilm ? '全自动·到成片' : '全自动·到提示词' }}」，点「从第 N 集续做」；已完成的文字{{ runFilm ? '和已出的图' : '' }}不会重做。</p>
   </div>
   <p v-if="error" class="manju-auto-error">{{ error }}</p>
@@ -139,8 +159,12 @@
 <script setup lang="ts">
 import { convertFileSrc } from '@tauri-apps/api/core'
 import { computed, ref, watch } from 'vue'
+import SegmentReviewTools from './SegmentReviewTools.vue'
+import type { SegmentReviewNote, VideoVersion } from '@/runtime/manjuAuto/videoScheduler'
+import type { MediaParamProfile } from '@/runtime/manjuAuto/mediaParams'
 import type { ManjuAutoDraft } from '@/composables/useManjuAuto'
-import { adviceSummary, episodeTextStatus, estimateUnitCost, modelLimits, priceForResolution, type AutoRunConfig, type VideoRoute, type AutoRunState, type EpisodePhase, type ReviewNotes } from '@/runtime/manjuAuto/autoRunner'
+import { useReviewPromptEditor } from '@/composables/useReviewPromptEditor'
+import { adviceSummary, completedEpisodeLabel, episodeTextStatus, estimateUnitCost, modelLimits, priceForResolution, type AutoRunConfig, type VideoRoute, type AutoRunState, type EpisodePhase, type ReviewNotes } from '@/runtime/manjuAuto/autoRunner'
 
 const props = defineProps<{
   draft: ManjuAutoDraft | null
@@ -149,57 +173,57 @@ const props = defineProps<{
   reviewBusy: Record<string, boolean>
   reviewErrors: Record<string, string>
   loadPrompt: (id: string) => Promise<string>
-  cutReview: { episode: number; videos: string[]; revised?: number[] } | null
+  cutReview: { episode: number; videos: string[]; revised?: number[]; versions?: VideoVersion[][]; firstFrameAvailable?: boolean[]; frameBindings?: Array<string | undefined>; notes?: Array<SegmentReviewNote | undefined>; framePreviews?: Record<number, string> } | null
   loadSegmentPrompt: (index: number) => Promise<string>
+  loadVideoProfile: (id: string) => Promise<MediaParamProfile>
   error: string
   stopping: boolean
   /** prompts：全自动·到提示词；film：全自动·到成片。 */
   target: 'prompts' | 'film'
 }>()
-const emit = defineEmits<{ start: [config: AutoRunConfig, resume: boolean]; cancel: []; stop: []; approve: []; regenerate: [id: string, prompt?: string]; regenerateSegment: [index: number, prompt?: string]; reviseEpisode: [notes: ReviewNotes]; approveCut: []; formal: [episodes: number[]] }>()
+const emit = defineEmits<{ start: [config: AutoRunConfig, resume: boolean]; cancel: []; stop: []; approve: []; regenerate: [id: string, prompt?: string]; regenerateSegment: [index: number, prompt?: string]; reviseEpisode: [notes: ReviewNotes]; approveCut: []; formal: [episodes: number[]]; restoreVersion: [index: number, id: string]; bindFrame: [index: number]; previewFrame: [index: number]; recordReview: [index: number, review: SegmentReviewNote]; processSegment: [index: number, adjustments: { brightness: number; contrast: number; saturation: number; warmth: number; volume: number }] }>()
 
-const editingId = ref('')
-const editingText = ref('')
-const loadingPrompt = ref(false)
+const promptEditor = useReviewPromptEditor((id: string) => props.loadPrompt(id))
+const { target: editingId, text: editingText, loading: loadingPrompt, error: promptError, canSave: canSavePrompt } = promptEditor
+const segmentEditor = useReviewPromptEditor((index: number) => props.loadSegmentPrompt(index))
+const { target: editingSegment, text: segmentText, loading: loadingSegment, error: segmentError, canSave: canSaveSegment } = segmentEditor
 const anyBusy = computed(() => Object.values(props.reviewBusy).some(Boolean))
+const missingImages = computed(() => props.review?.ids.some(id => !props.review!.images[id]) ?? false)
 async function openPromptEditor(id: string) {
-  editingId.value = id
-  editingText.value = ''
-  loadingPrompt.value = true
-  try { editingText.value = await props.loadPrompt(id) } catch (cause) { editingText.value = `读取提示词失败：${cause instanceof Error ? cause.message : String(cause)}` } finally { loadingPrompt.value = false }
+  await promptEditor.open(id)
 }
-const editingSegment = ref<number | null>(null)
 async function openSegmentEditor(index: number) {
-  editingSegment.value = index
-  editingText.value = ''
-  loadingPrompt.value = true
-  try { editingText.value = await props.loadSegmentPrompt(index) } catch (cause) { editingText.value = `读取提示词失败：${cause instanceof Error ? cause.message : String(cause)}` } finally { loadingPrompt.value = false }
+  await segmentEditor.open(index)
 }
 function saveSegmentPrompt() {
-  const index = editingSegment.value
-  if (index === null || !editingText.value.trim()) return
-  emit('regenerateSegment', index, editingText.value)
-  editingSegment.value = null
+  if (!anyBusy.value) segmentEditor.save((index, text) => emit('regenerateSegment', index, text))
 }
 /** 审片修改意见：键为段号（从 1 起），0 为整集；换一集审片时清空。 */
 const notes = ref<ReviewNotes>({})
+function recordNote(index: number, review: SegmentReviewNote) {
+  notes.value[index + 1] = ['story', 'continuity'].includes(review.category) ? `${review.category === 'story' ? '剧情与表演' : '空间与接续'}：${review.notes}`.replace(/：$/, '') : ''
+  if (!review.notes.trim()) notes.value[index + 1] = ''
+  emit('recordReview', index, review)
+}
 const hasNotes = computed(() => Object.values(notes.value).some(note => note.trim()))
-watch(() => props.cutReview?.episode, () => { notes.value = {} })
+watch(() => props.cutReview?.episode, () => { notes.value = {}; segmentEditor.close() })
+watch(() => props.review, () => promptEditor.close())
 function reviseEpisode() {
   if (!hasNotes.value) return
   emit('reviseEpisode', { ...notes.value })
   notes.value = {}
 }
 function savePrompt() {
-  const id = editingId.value
-  if (!id || !editingText.value.trim()) return
-  emit('regenerate', id, editingText.value)
-  editingId.value = ''
+  if (!anyBusy.value) promptEditor.save((id, text) => emit('regenerate', id, text))
 }
 
 const episodes = ref<number[]>([])
 const imageModelId = ref('')
 const videoModelId = ref('')
+const continuationModelId = ref('')
+const continuationProfile = ref<MediaParamProfile>()
+const continuationError = ref('')
+const continuationLoading = ref(false)
 const budget = ref<number | string>('')
 const reviewMode = ref<'new' | 'first' | 'off'>('new')
 const reviewVideos = ref(true)
@@ -220,6 +244,7 @@ watch(() => props.draft, draft => {
   videoModelId.value = pick(draft.videoModels, last?.videoModelId)
   // 出正式版：上次用的不是 Seedance 型号时，换成目录里第一个 Seedance 型号。
   if (draft.route === 'Seedance' && !/seedance/i.test(videoModelId.value)) videoModelId.value = draft.videoModels.find(model => /seedance/i.test(`${model.id} ${model.label}`))?.id || videoModelId.value
+  continuationModelId.value = last?.continuationModelId || ''
   if (last) {
     route.value = draft.route ?? last.videoModel
     budget.value = last.budgetPerEpisode ?? ''
@@ -239,7 +264,7 @@ const runFilm = computed(() => props.run?.config.target !== 'prompts')
 const phaseLabels = computed<Record<EpisodePhase, string>>(() => ({
   queued: '待做', text: '写提示词', assets: '生图中', review: '待审图', videos: '出片中', cut: '待审片', concat: '拼接中', done: runFilm.value ? '已成片' : '提示词完成', blocked: '已暂停',
 }))
-/** H3 测试版已成片的集：可沿用定稿的工程剧本与资产，用 Seedance 出正式版。 */
+/** H3 已拼接的集：可沿用工程剧本与资产，用 Seedance 另出一版。 */
 const formalEpisodes = computed(() => props.run && props.run.status !== 'running' && props.run.config.videoModel === 'H3' && runFilm.value
   ? Object.entries(props.run.episodes).filter(([, episode]) => episode.phase === 'done').map(([key]) => Number(key)) : [])
 const blockedEpisodes = computed(() => Object.fromEntries(Object.entries(props.run?.episodes || {}).filter(([, episode]) => episode.phase === 'blocked' && episode.reason)))
@@ -251,7 +276,37 @@ const resumeEpisode = computed(() => {
   return saved?.config.episodes.find(n => !['done', 'videos', 'cut', 'concat'].includes(saved.episodes[String(n)]?.phase)) ?? saved?.config.episodes[0]
 })
 const imageModel = computed(() => props.draft?.imageModels.find(model => model.id === imageModelId.value))
-const videoModel = computed(() => props.draft?.videoModels.find(model => model.id === videoModelId.value))
+const videoProfile = ref<MediaParamProfile>()
+const profileLoading = ref(false)
+const profileError = ref('')
+const profileNonce = ref(0)
+watch([videoModelId, () => props.draft, profileNonce], async ([id, draft], _, onCleanup) => {
+  let stale = false
+  onCleanup(() => { stale = true })
+  videoProfile.value = undefined; profileError.value = ''
+  if (!draft || !id) { profileLoading.value = false; return }
+  profileLoading.value = true
+  try { const profile = await props.loadVideoProfile(id); if (!stale) videoProfile.value = profile }
+  catch (cause) { if (!stale) profileError.value = cause instanceof Error ? cause.message : String(cause) }
+  finally { if (!stale) profileLoading.value = false }
+}, { immediate: true })
+watch([continuationModelId, () => props.draft, profileNonce], async ([id, draft], _, onCleanup) => {
+  let stale = false; onCleanup(() => { stale = true })
+  continuationProfile.value = undefined; continuationError.value = ''; continuationLoading.value = false
+  if (!id || !draft) return
+  continuationLoading.value = true
+  try {
+    const profile = await props.loadVideoProfile(id)
+    if (!profile.firstFrame || !profile.duration) throw new Error('此型号未声明首帧能力或有效时长，请选择首帧图生型号。')
+    if (profile.ratios?.length && draft.ratio && !profile.ratios.includes(draft.ratio)) throw new Error('续接型号不支持项目比例。')
+    if (!stale) continuationProfile.value = profile
+  } catch (cause) { if (!stale) continuationError.value = cause instanceof Error ? cause.message : String(cause) }
+  finally { if (!stale) continuationLoading.value = false }
+}, { immediate: true })
+const videoModel = computed(() => {
+  const model = props.draft?.videoModels.find(model => model.id === videoModelId.value)
+  return model && { ...model, ...(videoProfile.value && { duration: videoProfile.value.duration, maxImages: videoProfile.value.maxImages, resolutions: videoProfile.value.resolutions ?? model.resolutions }) }
+})
 const advice = computed(() => props.draft && adviceSummary(props.draft.advice, imageModel.value?.price))
 // 换模型时默认最低分辨率（测试最省钱）；分档价格按所选分辨率参与预算。
 watch(videoModel, model => {
@@ -260,6 +315,10 @@ watch(videoModel, model => {
 }, { immediate: true })
 const limits = computed(() => {
   const base = modelLimits(route.value, videoModel.value || {})
+  const duration = film.value && continuationModelId.value ? continuationProfile.value?.duration : undefined
+  const max = duration?.max ?? (duration?.allowedValues?.length ? Math.max(...duration.allowedValues) : undefined)
+  if (max) base.max_seconds = Math.min(base.max_seconds, max)
+  if (base.allowed_seconds) base.allowed_seconds = base.allowed_seconds.filter(seconds => seconds <= base.max_seconds)
   return pureText.value ? { ...base, max_refs: 0 } : base
 })
 /** 每集在所选路线下已有的文字进度：已完成可直接复用，超出所选模型限制的会按新模型重写。 */
@@ -276,12 +335,21 @@ const textStatus = computed(() => Object.fromEntries((props.draft?.episodes || [
 })))
 const videoPrice = computed(() => priceForResolution(videoModel.value?.price, videoResolution.value) ?? videoModel.value?.price)
 const priceNote = computed(() => {
-  const known = (pureText.value || estimateUnitCost(imageModel.value?.price) !== undefined) && estimateUnitCost(videoPrice.value) !== undefined
+  const known = (!continuationModelId.value || estimateUnitCost(props.draft?.videoModels.find(model => model.id === continuationModelId.value)?.price) !== undefined) && (pureText.value || estimateUnitCost(imageModel.value?.price) !== undefined) && estimateUnitCost(videoPrice.value) !== undefined
   return known
-    ? `${pureText.value ? '不生图' : `生图 ${imageModel.value!.price}`}，视频 ${videoPrice.value}。每集按新增资产与片段时长实时估算，超过单集预算即暂停。`
+      ? `${pureText.value ? '不生图' : `生图 ${imageModel.value!.price}`}，视频 ${videoPrice.value}${continuationModelId.value ? `，续接 ${props.draft?.videoModels.find(model => model.id === continuationModelId.value)?.price}` : ''}。每集按新增资产与片段时长实时估算，超过单集预算即暂停。`
     : '所选模型价格无法自动估算，单集预算不会拦截，请留意用量。'
 })
-const canStart = computed(() => Boolean(props.draft?.ratio && episodes.value.length && (imageModelId.value || !film.value || pureText.value) && videoModelId.value))
+const profileIssue = computed(() => {
+  const profile = videoProfile.value
+  if (!profile) return ''
+  if (!profile.duration) return '所选模型尚未声明时长范围，暂不能据此自动分段，请换用已声明时长的型号。'
+  if (limits.value.allowed_seconds?.length === 0) return '首段型号的固定时长超出续接型号上限，请更换兼容型号。'
+  if (profile.ratios?.length && props.draft?.ratio && !profile.ratios.includes(props.draft.ratio)) return '所选模型不支持项目已确认的比例，请选择兼容型号。'
+  if (profile.firstFrame?.exclusive && !profile.firstFrame.modeKey) return '所选型号仅支持首帧图生，不能将角色设定图直接当作整集首帧，请选择支持参考生成的型号。'
+  return ''
+})
+const canStart = computed(() => Boolean(props.draft?.ratio && episodes.value.length && (imageModelId.value || !film.value || pureText.value) && videoModelId.value && videoProfile.value && !profileLoading.value && !profileError.value && !profileIssue.value && (!film.value || !continuationModelId.value || Boolean(continuationProfile.value && !continuationError.value && !continuationLoading.value))))
 
 function startNew(resume = false) {
   const draft = props.draft
@@ -292,6 +360,8 @@ function startNew(resume = false) {
     episodes: episodes.value.slice().sort((a, b) => a - b),
     videoModel: route.value,
     limits: limits.value,
+    continuationModelId: film.value ? continuationModelId.value || undefined : undefined,
+    continuationPrice: props.draft?.videoModels.find(model => model.id === continuationModelId.value)?.price,
     imageModelId: imageModelId.value,
     videoModelId: videoModelId.value,
     ratio: draft.ratio,
@@ -332,7 +402,7 @@ function displaySrc(path?: string) {
 .manju-auto-images { display: grid; grid-template-columns: repeat(auto-fill, minmax(96px, 1fr)); gap: 8px; max-height: 300px; overflow-y: auto; }
 .manju-auto-images figure { margin: 0; }
 .manju-auto-images img { width: 100%; aspect-ratio: 3 / 4; object-fit: cover; border: 1px solid var(--line); border-radius: 5px; background: var(--surface); }
-.manju-auto-images figure { position: relative; display: grid; gap: 3px; }
+.manju-auto-images figure { position: relative; display: grid; align-content: start; gap: 3px; }
 .manju-auto-images figure.busy img { opacity: .35; }
 .manju-auto-videos { grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); max-height: 420px; }
 .manju-auto-videos video { width: 100%; max-height: 300px; border: 1px solid var(--line); border-radius: 5px; background: #000; }

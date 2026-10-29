@@ -1,7 +1,7 @@
 export const DEFAULT_PROVIDER_ID = 'jiucaihezi'
 export const DEFAULT_PROVIDER_HOST = 'https://api.jiucaihezi.studio'
 export const LOCAL_WEB_API_PROXY_BASE = '/__jc_api'
-export const DEFAULT_PROVIDER_NAME = '韭菜盒子'
+export const DEFAULT_PROVIDER_NAME = 'COMIC-BOX'
 export const LOCAL_OLLAMA_PROVIDER_ID = 'local-ollama'
 export const LOCAL_OLLAMA_PROVIDER_HOST = 'http://127.0.0.1:11434'
 export const LOCAL_OLLAMA_PROVIDER_NAME = 'Ollama'

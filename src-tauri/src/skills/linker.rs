@@ -70,20 +70,10 @@ pub fn make_relative_path(from_dir: &Path, to_path: &Path) -> PathBuf {
 
 // ─── Platform-specific symlink creation ──────────────────────────────────────
 
-#[cfg(unix)]
-pub fn create_symlink(target: &Path, link: &Path) -> Result<(), String> {
-    std::os::unix::fs::symlink(target, link).map_err(|e| format!("Failed to create symlink: {}", e))
-}
-
 #[cfg(windows)]
 pub fn create_symlink(target: &Path, link: &Path) -> Result<(), String> {
     std::os::windows::fs::symlink_dir(target, link)
         .map_err(|e| format!("Failed to create symlink: {}", e))
-}
-
-#[cfg(not(any(unix, windows)))]
-pub fn create_symlink(_target: &Path, _link: &Path) -> Result<(), String> {
-    Err("Symlink creation is only supported on Unix systems".to_string())
 }
 
 /// 删除符号链接本身（不触碰它指向的目标）。
@@ -369,11 +359,6 @@ pub async fn install_skill_to_agent_auto_impl(
 #[cfg(windows)]
 fn should_fallback_to_copy(error: &str) -> bool {
     error.contains("Failed to create symlink")
-}
-
-#[cfg(not(windows))]
-fn should_fallback_to_copy(_error: &str) -> bool {
-    false
 }
 
 /// Core copy-install logic — copies the skill directory instead of symlinking.

@@ -1,14 +1,12 @@
 use keyring::Entry;
 
-const KEYCHAIN_SERVICE: &str = "com.jiucaihezi.app";
+const KEYCHAIN_SERVICE: &str = "com.comicbox.app";
 const KEYCHAIN_ACCOUNT: &str = "primary-api-key";
 const GATEWAY_SESSION_ACCOUNT: &str = "gateway-session-token";
 const COMFY_WORKFLOW_ACCOUNT: &str = "comfy-workflow-api-key";
 const REMOTE_BRIDGE_IDENTITY_ACCOUNT: &str = "remote-bridge-identity-v1";
 const REMOTE_BRIDGE_DEVICES_ACCOUNT: &str = "remote-bridge-devices-v1";
 const REMOTE_BRIDGE_RELAY_ACCOUNT: &str = "remote-bridge-relay-v1";
-const MOBILE_REMOTE_IDENTITY_ACCOUNT: &str = "mobile-remote-identity-v1";
-const MOBILE_REMOTE_CREDENTIAL_ACCOUNT: &str = "mobile-remote-credential-v1";
 
 /// CLI tools (jc_media.py etc.) 读取 Key 的文件路径
 fn cli_key_file_path() -> std::path::PathBuf {
@@ -16,29 +14,117 @@ fn cli_key_file_path() -> std::path::PathBuf {
         .or_else(|_| std::env::var("USERPROFILE"))
         .unwrap_or_else(|_| ".".to_string());
     std::path::PathBuf::from(home)
-        .join(".jiucaihezi")
+        .join(".comic-box")
         .join(".jc_api_key")
 }
 
-/// 将 Key 同步写入 ~/.jiucaihezi/.jc_api_key，供 CLI 工具读取
-fn sync_key_to_cli_file(key: &str) {
+/// 将 Key 同步写入 ~/.comic-box/.jc_api_key，供 CLI 工具读取
+fn sync_key_to_cli_file(key: &str) -> Result<(), String> {
     let path = cli_key_file_path();
+    sync_key_file(&path, key)
+}
+
+fn sync_key_file(path: &std::path::Path, key: &str) -> Result<(), String> {
     if let Some(parent) = path.parent() {
-        let _ = std::fs::create_dir_all(parent);
+        std::fs::create_dir_all(parent).map_err(|error| format!("创建 API Key 目录失败: {error}"))?;
     }
-    let _ = std::fs::write(&path, key.trim());
+    let temporary = path.with_extension(format!("tmp-{}", uuid::Uuid::new_v4()));
+    let result: Result<(), String> = (|| {
+        use std::io::Write;
+        let mut file = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&temporary)
+            .map_err(|error| format!("创建 API Key 临时文件失败: {error}"))?;
+        file.write_all(key.trim().as_bytes())
+            .and_then(|()| file.sync_all())
+            .map_err(|error| format!("写入 API Key 文件失败: {error}"))?;
+        std::fs::rename(&temporary, &path).map_err(|error| format!("替换 API Key 文件失败: {error}"))?;
+        Ok(())
+    })();
+    if result.is_err() { let _ = std::fs::remove_file(&temporary); }
+    result?;
     // 设置权限 600（仅 owner 可读写）
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        let _ = std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600));
+
+    Ok(())
+}
+
+#[cfg(test)]
+mod cli_key_file_tests {
+    use super::*;
+
+    #[test]
+    fn atomically_replaces_the_existing_key_file() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join(".jc_api_key");
+        std::fs::write(&path, "old-key").unwrap();
+
+        sync_key_file(&path, "  new-key  ").unwrap();
+
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "new-key");
+        assert_eq!(std::fs::read_dir(directory.path()).unwrap().count(), 1);
+    }
+
+    #[test]
+    fn reports_a_directory_creation_failure() {
+        let directory = tempfile::tempdir().unwrap();
+        let parent_file = directory.path().join("not-a-directory");
+        std::fs::write(&parent_file, "occupied").unwrap();
+
+        let error = sync_key_file(&parent_file.join(".jc_api_key"), "key").unwrap_err();
+
+        assert!(error.contains("创建 API Key 目录失败"));
+    }
+}
+
+#[cfg(all(test, target_os = "windows"))]
+mod windows_keyring_tests {
+    use super::*;
+
+    const SERVICE: &str = "com.comicbox.windows-keyring-test";
+    const SERVICE_ENV: &str = "COMICBOX_KEYRING_TEST_SERVICE";
+    const ACCOUNT_ENV: &str = "COMICBOX_KEYRING_TEST_ACCOUNT";
+    const PASSWORD_ENV: &str = "COMICBOX_KEYRING_TEST_PASSWORD";
+
+    #[test]
+    fn credential_reader_process() {
+        let (Ok(service), Ok(account), Ok(password)) = (
+            std::env::var(SERVICE_ENV),
+            std::env::var(ACCOUNT_ENV),
+            std::env::var(PASSWORD_ENV),
+        ) else { return };
+        let entry = Entry::new(&service, &account).unwrap();
+        assert_eq!(entry.get_password().unwrap(), password);
+    }
+
+    #[test]
+    fn credential_survives_entry_recreation_and_process_restart() {
+        let account = format!("probe-{}", uuid::Uuid::new_v4());
+        let password = format!("test-only-{}", uuid::Uuid::new_v4());
+        Entry::new(SERVICE, &account).unwrap().set_password(&password).unwrap();
+
+        let mut child = std::process::Command::new(std::env::current_exe().unwrap());
+        super::super::commands::tools::configure_background_command(&mut child);
+        let result = child
+            .args(["--exact", "secure_store::windows_keyring_tests::credential_reader_process"])
+            .env(SERVICE_ENV, SERVICE)
+            .env(ACCOUNT_ENV, &account)
+            .env(PASSWORD_ENV, &password)
+            .output();
+        let _ = Entry::new(SERVICE, &account).unwrap().delete_credential();
+        let output = result.unwrap();
+        assert!(output.status.success(), "child keyring read failed: {}", String::from_utf8_lossy(&output.stderr));
     }
 }
 
 /// 删除 CLI Key 文件（清除 Key 时）
-fn clear_cli_key_file() {
+fn clear_cli_key_file() -> Result<(), String> {
     let path = cli_key_file_path();
-    let _ = std::fs::remove_file(&path);
+    match std::fs::remove_file(&path) {
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(format!("删除 API Key 文件失败: {error}")),
+    }
 }
 
 fn entry() -> Result<Entry, String> {
@@ -86,34 +172,6 @@ pub(crate) fn set_remote_bridge_relay(value: &str) -> Result<(), String> {
     remote_bridge_entry(REMOTE_BRIDGE_RELAY_ACCOUNT)?
         .set_password(value)
         .map_err(|error| error.to_string())
-}
-
-/// 手机控制器的设备身份与配对凭证。
-///
-/// 与 Desktop 那两条区分开：这里存的是本机的设备私钥和 Desktop 签发的 token，
-/// 既不是 Desktop 的长期身份，也不含 Desktop 私钥（合同 §4）。
-pub(crate) fn get_mobile_remote_identity() -> Result<Option<String>, String> {
-    get_entry_value(remote_bridge_entry(MOBILE_REMOTE_IDENTITY_ACCOUNT)?)
-}
-
-pub(crate) fn set_mobile_remote_identity(value: &str) -> Result<(), String> {
-    remote_bridge_entry(MOBILE_REMOTE_IDENTITY_ACCOUNT)?
-        .set_password(value)
-        .map_err(|error| error.to_string())
-}
-
-pub(crate) fn get_mobile_remote_credential() -> Result<Option<String>, String> {
-    get_entry_value(remote_bridge_entry(MOBILE_REMOTE_CREDENTIAL_ACCOUNT)?)
-}
-
-pub(crate) fn set_mobile_remote_credential(value: &str) -> Result<(), String> {
-    remote_bridge_entry(MOBILE_REMOTE_CREDENTIAL_ACCOUNT)?
-        .set_password(value)
-        .map_err(|error| error.to_string())
-}
-
-pub(crate) fn clear_mobile_remote_credential() -> Result<(), String> {
-    clear_entry_value(remote_bridge_entry(MOBILE_REMOTE_CREDENTIAL_ACCOUNT)?)
 }
 
 fn mcp_oauth_entry(server_id: &str) -> Result<Entry, String> {
@@ -179,10 +237,7 @@ pub fn get_api_key() -> Result<Option<String>, String> {
 /// 用于 Keychain 不可用时的降级方案
 #[tauri::command]
 pub fn get_cli_api_key() -> Result<Option<String>, String> {
-    #[cfg(target_os = "ios")]
-    return get_api_key();
 
-    #[cfg(not(target_os = "ios"))]
     {
         let path = cli_key_file_path();
         match std::fs::read_to_string(&path) {
@@ -202,17 +257,19 @@ pub fn get_cli_api_key() -> Result<Option<String>, String> {
 
 #[tauri::command]
 pub fn set_api_key(api_key: String) -> Result<(), String> {
-    let result = set_entry_value(entry()?, api_key.clone(), clear_api_key);
-    if result.is_ok() {
-        sync_key_to_cli_file(&api_key);
+    if api_key.trim().is_empty() {
+        return clear_api_key();
     }
-    result
+    entry()?
+        .set_password(api_key.trim())
+        .map_err(|error| error.to_string())?;
+    sync_key_to_cli_file(&api_key)
 }
 
 #[tauri::command]
 pub fn clear_api_key() -> Result<(), String> {
-    clear_cli_key_file();
-    clear_entry_value(entry()?)
+    clear_entry_value(entry()?)?;
+    clear_cli_key_file()
 }
 
 #[tauri::command]
@@ -301,14 +358,14 @@ fn retain_download_key_at(root: &std::path::Path, key: &str) -> Result<String, S
     if key.is_empty() { return Err("缺少任务提交密钥".into()); }
     if std::fs::symlink_metadata(root).is_ok_and(|m| m.file_type().is_symlink()) { return Err("下载凭据目录不能是符号链接".into()); }
     std::fs::create_dir_all(root).map_err(|_| "创建下载凭据目录失败")?;
-    #[cfg(unix)] { use std::os::unix::fs::PermissionsExt; std::fs::set_permissions(root, std::fs::Permissions::from_mode(0o700)).map_err(|_| "保护下载凭据目录失败")?; }
+
     let reference = format!("{:x}", Sha256::digest(key.as_bytes()));
     let path = root.join(&reference);
     if path.exists() { read_download_key_at(root, &reference)?; return Ok(reference); }
     let staged = root.join(format!(".{reference}.{}.tmp", uuid::Uuid::new_v4()));
     let mut options = std::fs::OpenOptions::new();
     options.write(true).create_new(true);
-    #[cfg(unix)] { use std::os::unix::fs::OpenOptionsExt; options.mode(0o600); }
+
     let mut file = options.open(&staged).map_err(|_| "保存任务下载密钥失败")?;
     use std::io::Write;
     file.write_all(key.as_bytes()).and_then(|_| file.sync_all()).map_err(|_| "保存任务下载密钥失败")?;
@@ -351,7 +408,7 @@ mod download_key_tests {
         assert_eq!(read_download_key_at(root.path(), &first).unwrap(), "local-first");
         assert_eq!(retain_download_key_at(root.path(), "local-first").unwrap(), first);
         assert!(read_download_key_at(root.path(), "../escape").is_err());
-        #[cfg(unix)] { use std::os::unix::fs::PermissionsExt; assert_eq!(std::fs::metadata(root.path().join(first)).unwrap().permissions().mode() & 0o777, 0o600); }
+
     }
 }
 

@@ -602,11 +602,9 @@ fn split_command(command: &str) -> Result<(String, Vec<String>), String> {
     }
     #[cfg(target_os = "windows")]
     return Ok(("cmd".into(), vec!["/C".into(), value.into()]));
-    #[cfg(not(target_os = "windows"))]
-    return Ok(("sh".into(), vec!["-lc".into(), value.into()]));
 }
 
-#[cfg(all(test, not(any(target_os = "ios", target_os = "android"))))]
+#[cfg(test)]
 mod tests {
     use super::*;
     use crate::commands::http::{
@@ -718,7 +716,7 @@ mod tests {
     #[test]
     fn whisper_model_dirs_follow_the_shared_home_convention() {
         let home = crate::skills::path_utils::resolve_home_dir();
-        let shared = home.join(".jiucaihezi").join("tools").join("whisper-models");
+        let shared = home.join(".comic-box").join("tools").join("whisper-models");
 
         assert!(
             whisper_model_dirs().contains(&shared),
@@ -867,20 +865,6 @@ mod tests {
             .is_err()
         );
 
-        #[cfg(unix)]
-        {
-            let secret_target = temp_test_dir("source_secret_target");
-            let link = runtime_root.join("link_to_secret");
-            std::os::unix::fs::symlink(&secret_target, &link).expect("create source symlink");
-            assert!(
-                build_skill_material_command(&compile_input(
-                    &runtime_root,
-                    "local_codebase",
-                    &link.to_string_lossy()
-                ))
-                .is_err()
-            );
-        }
     }
 
     #[test]
@@ -894,12 +878,6 @@ mod tests {
         let paths: Vec<String> = files.into_iter().map(|file| file.path).collect();
         assert_eq!(paths, vec!["SKILL.md", "references/source.md"]);
 
-        #[cfg(unix)]
-        {
-            std::os::unix::fs::symlink(root.join("SKILL.md"), root.join("references/link.md"))
-                .expect("symlink");
-            assert!(collect_skill_material_raw_files(&root, 10, 1024).is_err());
-        }
     }
 
     #[test]
@@ -1268,8 +1246,7 @@ fn workbench_window_config(
         .cloned()
         .ok_or("missing main window config")?;
     config.label = label.to_string();
-    #[cfg(all(debug_assertions, not(mobile)))]
-    {
+    if tauri::is_dev() {
         config.url = tauri::WebviewUrl::External(
             app.config()
                 .build
@@ -1279,7 +1256,7 @@ fn workbench_window_config(
         );
     }
     if let Some(cwd) = workspace {
-        config.title = format!("韭菜盒子 — {}", workspace_name(cwd));
+        config.title = format!("COMIC-BOX — {}", workspace_name(cwd));
     }
     Ok(config)
 }
@@ -1332,8 +1309,7 @@ fn build_workbench_window(
         )),
         None => builder,
     };
-    #[cfg(target_os = "ios")]
-    let builder = builder.with_input_accessory_view_builder(|_| None);
+
     builder.build()
 }
 
@@ -1346,8 +1322,6 @@ pub(crate) fn spawn_workbench_window(
     label: &str,
     workspace: Option<&str>,
 ) -> Result<String, String> {
-    #[cfg(not(any(target_os = "ios", target_os = "android")))]
-    let _update_task = commands::desktop_update::native_task(app, "打开窗口")?;
     let config = workbench_window_config(app, label, workspace)?;
     let window =
         build_workbench_window(app, &config, workspace).map_err(|error| error.to_string())?;
@@ -1440,9 +1414,6 @@ fn attach_window_state(app: &tauri::AppHandle, window: &tauri::WebviewWindow, la
         // 窗口销毁：它名下的 runner 立刻就是孤儿。必须在应用还活着时就收 ——
         // 退出路径不会跑（应用没退），而它会一直握着会话的跨进程内核写锁。
         if matches!(event, tauri::WindowEvent::Destroyed) {
-            #[cfg(not(any(target_os = "ios", target_os = "android")))]
-            commands::desktop_update::window_closed(w.app_handle(), &reap_label);
-            #[cfg(any(target_os = "windows", target_os = "macos"))]
             commands::screenshot::window_closed(&w.app_handle(), &reap_label);
             let reaped = commands::mcp::reap_window_stdio_processes(&reap_label);
             if reaped > 0 {
@@ -1478,8 +1449,7 @@ fn attach_window_state(app: &tauri::AppHandle, window: &tauri::WebviewWindow, la
 /// 多窗口之后这条语义仍然成立：「再点一次图标」= 回到我正在看的那个窗口，而不是开新的
 /// —— 开新窗口有显式菜单入口。
 ///
-/// 与插件同条件编译：只在正式构建用得上（dev 下不注册单实例，见 `run` 里的注释）。
-#[cfg(all(not(any(target_os = "ios", target_os = "android")), not(debug_assertions)))]
+/// 与插件同为桌面代码；仅独立安装包注册回调，tauri dev 不注册。
 fn focus_existing_window(app: &tauri::AppHandle) {
     if let Some(window) = focused_window(app) {
         let _ = window.unminimize();
@@ -1488,10 +1458,7 @@ fn focus_existing_window(app: &tauri::AppHandle) {
     }
 }
 
-#[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    #[cfg(target_os = "ios")]
-    let _ = rustls::crypto::ring::default_provider().install_default();
 
     // ─── Windows WebView2 检测 ───
     // Tauri v2 在 Windows 上依赖系统 WebView2 Runtime（不像 Electron 自带 Chromium）。
@@ -1530,38 +1497,34 @@ pub fn run() {
             );
             eprintln!("[JC] 请从以下地址下载安装：");
             eprintln!("[JC] https://go.microsoft.com/fwlink/p/?LinkId=2124703");
-            eprintln!("[JC] 安装后重新运行韭菜盒子即可。");
+            eprintln!("[JC] 安装后重新运行COMIC-BOX即可。");
         }
     }
 
     let builder = tauri::Builder::default();
-    #[cfg(not(any(target_os = "ios", target_os = "android")))]
-    let builder = builder.manage(commands::desktop_update::DesktopUpdateState::default());
     // 单实例必须**最先**注册：第二个进程要把命令行与深链交给已有实例，然后自己退出。
     // 没有它，双击图标会起第二个完整进程——各自一份 Rust 全局状态、各自一份 runner，
     // 比多窗口更糟，而且用户看不到任何提示。
     //
-    // **只在正式构建启用**：锁是按 bundle identifier 加的，dev 与正式包同 ID，所以
-    // 「先开着已安装的旧版，再跑 tauri dev」会把 dev 进程交给那个旧包——你会以为在测 HEAD，
-    // 实际看的是旧版本。那比多开本身更难查，所以宁可不在 dev 里启用。
-    #[cfg(all(not(any(target_os = "ios", target_os = "android")), not(debug_assertions)))]
-    let builder = builder.plugin(tauri_plugin_single_instance::init(|app, _argv, _cwd| {
-        focus_existing_window(app);
-    }));
+    // 独立安装包（含调试对比包）使用应用 identifier 作为互斥标识。
+    // tauri dev 仍跳过互斥，避免开发窗口被已安装的同产品实例接管。
+    let builder = if tauri::is_dev() {
+        builder
+    } else {
+        builder.plugin(tauri_plugin_single_instance::init(|app, _argv, _cwd| {
+            focus_existing_window(app);
+        }))
+    };
     let builder = builder
         .manage(commands::creation_mcp::CreationMcpState::default())
         .manage(commands::remote_bridge::RemoteBridgeState::default())
-        .manage(commands::remote_client::MobileRemoteState::default())
+        .manage(MediaCaptureJobs::default())
         .plugin(tauri_plugin_fs::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_notification::init());
-    // 条码扫描插件整包是 #![cfg(mobile)]：桌面目标上编不出它的 init，
-    // 只能在移动目标注册。手机控制器靠它扫配对二维码。
-    #[cfg(any(target_os = "ios", target_os = "android"))]
-    let builder = builder.plugin(tauri_plugin_barcode_scanner::init());
     let builder = builder
         .plugin(tauri_plugin_deep_link::init())
         .plugin(tauri_plugin_sql::Builder::default().build());
@@ -1579,19 +1542,13 @@ pub fn run() {
     });
     let app = builder
         .setup(|app| {
-            #[cfg(not(any(target_os = "ios", target_os = "android")))]
-            commands::desktop_update::setup(app.handle());
-            #[cfg(not(any(target_os = "ios", target_os = "android")))]
             commands::remote_bridge::autostart(app.handle());
-            #[cfg(any(target_os = "windows", target_os = "macos"))]
             commands::screenshot::setup(app.handle())?;
             let app_data = app.path().app_data_dir()?;
             let skills_db_dir = app_data.join("skillsmanage");
             std::fs::create_dir_all(&skills_db_dir)?;
             let skills_db_path =
                 skills::path_utils::path_to_string(&skills_db_dir.join("db.sqlite"));
-            #[cfg(target_os = "ios")]
-            let mobile_skills_root = app_data.join("skills");
 
             // 解析内置 Skill 源目录（同步，不阻塞窗口创建）
             // dev: 从 target/debug/ 上 3 层到项目根 → public/skills/
@@ -1612,21 +1569,7 @@ pub fn run() {
                         if let Err(e) = skills::db::init_database(&pool).await {
                             eprintln!("[JC] skills DB init failed: {e}");
                         }
-                        #[cfg(target_os = "ios")]
-                        {
-                            let root = skills::path_utils::path_to_string(&mobile_skills_root);
-                            if let Err(e) = std::fs::create_dir_all(&mobile_skills_root) {
-                                eprintln!("[JC] mobile skills directory failed: {e}");
-                            } else if let Err(e) = sqlx::query(
-                                "UPDATE agents SET global_skills_dir = ? WHERE id = 'central'",
-                            )
-                            .bind(root)
-                            .execute(&pool)
-                            .await
-                            {
-                                eprintln!("[JC] mobile skills path repair failed: {e}");
-                            }
-                        }
+
                         // 内置 Skill 保持在应用资源中；仅清理旧版本创建的带标记副本。
                         if let Some(ref src) = skills_src {
                             if let Err(e) = skills::db::remove_seeded_preset_skills(src) {
@@ -1649,7 +1592,6 @@ pub fn run() {
             // 创建 vault 子目录
             std::fs::create_dir_all(app_data.join("vault")).ok();
 
-            #[cfg(not(mobile))]
             if let Err(error) = commands::creation_mcp::start(app.handle().clone()) {
                 eprintln!("[creation-mcp] bridge disabled: {error}");
             }
@@ -1657,134 +1599,33 @@ pub fn run() {
             // ★ 手动建窗以挂载 on_navigation 拦截 NewAPI 登录回调。
             // 与「在新窗口打开工作区」共用 build_workbench_window：两处各写一份迟早漂移，
             // 而漂移的代价是登录回调在某一种窗口里变成打不开的死浏览器。
-            #[cfg(not(any(target_os = "ios", target_os = "android")))]
-            let resume = commands::desktop_update::resume_windows(app.handle());
-            #[cfg(any(target_os = "ios", target_os = "android"))]
-            let resume: Vec<(String, Option<String>)> = Vec::new();
-            let main_cwd = resume.iter().find(|(label, _)| label == "main").and_then(|(_, cwd)| cwd.as_deref());
-            let main_config = workbench_window_config(app.handle(), "main", main_cwd)?;
-            let window = build_workbench_window(app.handle(), &main_config, main_cwd)?;
+            let main_config = workbench_window_config(app.handle(), "main", None)?;
+            let window = build_workbench_window(app.handle(), &main_config, None)?;
 
             // ponytail: 照抄 OpenCode desktop/main/menu.ts — macOS 应用菜单
-            #[cfg(target_os = "macos")]
-            {
-                use tauri::menu::{MenuBuilder, PredefinedMenuItem, SubmenuBuilder};
-                // macOS 系统菜单项的默认文案是英文（Tauri 不随系统语言本地化），
-                // 要中文只能自己传文案，否则用户看到的是 Undo / Cut / Paste 那一套。
-                // 另外 macOS 会给**标题恰好是 "Edit"** 的菜单自动塞 AutoFill / 开始听写 / 表情与符号，
-                // 改叫「编辑」之后这些系统项自己就没了 —— 它们不是我们加的，也没法单独关掉。
-                // 新建窗口是这个 App 用得最多的一条命令（多开是主用法），所以放在第一个菜单的
-                // 第一项 —— 点开菜单第一个看到的就是它。
-                let new_window_item = tauri::menu::MenuItemBuilder::with_id(
-                    "jc:new-window",
-                    "新建窗口",
-                )
-                .accelerator("CmdOrCtrl+Shift+N")
-                .build(app)?;
-                let app_menu = SubmenuBuilder::new(app, "韭菜盒子")
-                    .item(&new_window_item)
-                    .separator()
-                    .item(&PredefinedMenuItem::about(app, Some("关于韭菜盒子"), None)?)
-                    .separator()
-                    .item(&PredefinedMenuItem::hide(app, Some("隐藏韭菜盒子"))?)
-                    .item(&PredefinedMenuItem::hide_others(app, Some("隐藏其他"))?)
-                    .item(&PredefinedMenuItem::show_all(app, Some("全部显示"))?)
-                    .separator()
-                    .item(&PredefinedMenuItem::quit(app, Some("退出韭菜盒子"))?)
-                    .build()?;
-                // PredefinedMenuItem 必须放在子菜单里才能正确注册键盘加速器。
-                // 这六项不是装饰：没有它们，输入框里的 ⌘C / ⌘V / ⌘Z 就没有菜单落点。
-                let edit_menu = SubmenuBuilder::new(app, "编辑")
-                    .item(&PredefinedMenuItem::undo(app, Some("撤销"))?)
-                    .item(&PredefinedMenuItem::redo(app, Some("重做"))?)
-                    .separator()
-                    .item(&PredefinedMenuItem::cut(app, Some("剪切"))?)
-                    .item(&PredefinedMenuItem::copy(app, Some("复制"))?)
-                    .item(&PredefinedMenuItem::paste(app, Some("粘贴"))?)
-                    .separator()
-                    .item(&PredefinedMenuItem::select_all(app, Some("全选"))?)
-                    .build()?;
-                // 「服务」子菜单已移除：它列的是别的 App 提供的系统服务，
-                // 用户机器上出现的是 Instruments 那几项（Activity Monitor / Time Profile …），
-                // 与韭菜盒子无关，纯噪音。
-                // maximize 在 macOS 走的是 performZoom:（绿按钮那个行为），所以叫「缩放」而不是「最大化」。
-                //
-                // 这几项不是装饰：macOS 的 ⌘M / ⌘W / ⌃⌘F 都是经菜单分发到响应链的，
-                // 菜单里没有这一项，快捷键就没有落点 —— 之前这里没有「关闭窗口」，⌘W 一直是没反应的。
-                let window_menu = SubmenuBuilder::new(app, "窗口")
-                    .item(&PredefinedMenuItem::minimize(app, Some("最小化"))?)
-                    .item(&PredefinedMenuItem::maximize(app, Some("缩放"))?)
-                    .item(&PredefinedMenuItem::close_window(app, Some("关闭窗口"))?)
-                    .separator()
-                    .item(&PredefinedMenuItem::fullscreen(app, Some("全屏"))?)
-                    .build()?;
-                // 这三个子菜单的顺序就是 macOS 的菜单栏顺序：应用菜单必须是第一个。
-                let menu = MenuBuilder::new(app)
-                    .item(&app_menu)
-                    .item(&edit_menu)
-                    .item(&window_menu)
-                    .build()?;
-                app.set_menu(menu)?;
-            }
 
             // ponytail: 照抄 OpenCode desktop/main/windows.ts — 窗口状态持久化
             // （每窗口一份文件 + 销毁时收 runner，见 `attach_window_state`）
             attach_window_state(app.handle(), &window, "main");
-            for (label, cwd) in &resume {
-                if label != "main" {
-                    if let Err(error) = spawn_workbench_window(app.handle(), label, cwd.as_deref()) {
-                        eprintln!("[updater] restore window {label}: {error}");
-                    }
-                }
-            }
+
 
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
-            #[cfg(not(any(target_os = "ios", target_os = "android")))]
-            commands::desktop_update::desktop_update_status,
-            #[cfg(not(any(target_os = "ios", target_os = "android")))]
-            commands::desktop_update::desktop_update_check,
-            #[cfg(not(any(target_os = "ios", target_os = "android")))]
-            commands::desktop_update::desktop_update_download,
-            #[cfg(not(any(target_os = "ios", target_os = "android")))]
-            commands::desktop_update::desktop_update_install,
-            #[cfg(not(any(target_os = "ios", target_os = "android")))]
-            commands::desktop_update::desktop_update_ack,
-            #[cfg(not(any(target_os = "ios", target_os = "android")))]
-            commands::desktop_update::desktop_update_task_begin,
-            #[cfg(not(any(target_os = "ios", target_os = "android")))]
-            commands::desktop_update::desktop_update_task_end,
-            commands::desktop_update::desktop_update_tasks,
-            #[cfg(any(target_os = "windows", target_os = "macos"))]
             commands::screenshot::screenshot_check,
-            #[cfg(any(target_os = "windows", target_os = "macos"))]
             commands::screenshot::screenshot_validate_project,
-            #[cfg(any(target_os = "windows", target_os = "macos"))]
             commands::screenshot::screenshot_settings,
-            #[cfg(any(target_os = "windows", target_os = "macos"))]
             commands::screenshot::screenshot_set_settings,
-            #[cfg(any(target_os = "windows", target_os = "macos"))]
             commands::screenshot::screenshot_recording,
-            #[cfg(any(target_os = "windows", target_os = "macos"))]
             commands::screenshot::screenshot_permission,
-            #[cfg(any(target_os = "windows", target_os = "macos"))]
             commands::screenshot::screenshot_begin,
-            #[cfg(any(target_os = "windows", target_os = "macos"))]
             commands::screenshot::screenshot_read,
-            #[cfg(any(target_os = "windows", target_os = "macos"))]
             commands::screenshot::screenshot_ready,
-            #[cfg(any(target_os = "windows", target_os = "macos"))]
             commands::screenshot::screenshot_crop,
-            #[cfg(any(target_os = "windows", target_os = "macos"))]
             commands::screenshot::screenshot_copy,
-            #[cfg(any(target_os = "windows", target_os = "macos"))]
             commands::screenshot::screenshot_end,
-            #[cfg(any(target_os = "windows", target_os = "macos"))]
             commands::screenshot::screenshot_save_project,
-            #[cfg(any(target_os = "windows", target_os = "macos"))]
             commands::screenshot::screenshot_save_result,
-            #[cfg(any(target_os = "windows", target_os = "macos"))]
             commands::screenshot::screenshot_remember_directory,
             commands::greet::greet,
             commands::workspace::open_workspace_window,
@@ -1842,11 +1683,6 @@ pub fn run() {
             commands::remote_bridge::remote_device_revoke,
             commands::remote_bridge::remote_bridge_complete,
             commands::remote_bridge::remote_bridge_publish,
-            commands::remote_client::mobile_remote_status,
-            commands::remote_client::mobile_remote_pair,
-            commands::remote_client::mobile_remote_connect,
-            commands::remote_client::mobile_remote_request,
-            commands::remote_client::mobile_remote_disconnect,
             commands::greet::save_generated_file,
             commands::dev::dev_detect_project,
             commands::dev::dev_list_files,
@@ -1907,6 +1743,7 @@ pub fn run() {
             commands::media::media_transcribe_file,
             commands::media::media_burn_subtitles,
             commands::media::media_concat_videos,
+            commands::media::media_review_video,
             commands::plugin::plugin_install_npm,
             commands::plugin::plugin_read_manifest,
             commands::plugin::plugin_read_config,

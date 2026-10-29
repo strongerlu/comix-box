@@ -187,19 +187,30 @@ async function rustFetch(url: string, init?: RequestInit): Promise<Response> {
   const { headers, body, body_base64 } = await serializeRustHttpBody(url, init)
   if (init?.signal?.aborted) throw new DOMException('The operation was aborted', 'AbortError')
 
-  const result = await invoke<RustHttpResponse>('http_request', {
-    request: {
-      url,
-      method: init?.method || 'GET',
-      headers: Object.keys(headers).length > 0 ? headers : undefined,
-      body,
-      body_base64,
-      timeout_secs: pickTimeoutForUrl(url),
-      deny_redirects: init?.redirect === 'error',
-    },
+  // invoke 本身不接受 AbortSignal；客户端停止等待不代表上游生成已取消。
+  let abortRequest: (() => void) | undefined
+  const aborted = new Promise<never>((_, reject) => {
+    abortRequest = () => reject(new DOMException('The operation was aborted', 'AbortError'))
+    init?.signal?.addEventListener('abort', abortRequest, { once: true })
+    if (init?.signal?.aborted) abortRequest()
   })
+  try {
+    const result = await Promise.race([aborted, invoke<RustHttpResponse>('http_request', {
+      request: {
+        url,
+        method: init?.method || 'GET',
+        headers: Object.keys(headers).length > 0 ? headers : undefined,
+        body,
+        body_base64,
+        timeout_secs: pickTimeoutForUrl(url),
+        deny_redirects: init?.redirect === 'error',
+      },
+    })])
 
-  return createRustHttpResponse(result)
+    return createRustHttpResponse(result)
+  } finally {
+    if (abortRequest) init?.signal?.removeEventListener('abort', abortRequest)
+  }
 }
 
 /**

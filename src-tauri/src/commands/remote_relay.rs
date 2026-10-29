@@ -23,8 +23,8 @@ pub const RELAY_CANDIDATE: &str = "relay";
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(6);
 /// TLS 与 WebSocket 升级的总等待：5G 下经 Cloudflare 唤醒房间，十秒上下并不少见。
 const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(20);
-/// 握手期间单次读的超时；到点只是“还没回”，接着等，直到总等待用完。
-const HANDSHAKE_POLL: Duration = Duration::from_secs(1);
+/// 非阻塞握手的重试间隔；Windows 的阻塞读超时不能作为可续接握手。
+const HANDSHAKE_POLL: Duration = Duration::from_millis(15);
 /// 隧道两头轮询的间隔：同步 WebSocket 不能一边阻塞读一边写，只能轮流短读。
 const POLL: Duration = Duration::from_millis(15);
 /// 控制连接心跳。中继侧由 Cloudflare 自动回 pong，不唤醒房间。
@@ -153,6 +153,10 @@ fn open_request(text: &str) -> Option<String> {
 }
 
 fn open(ticket: &RelayTicket, path: &str) -> Result<Socket, String> {
+    open_with_timeout(ticket, path, HANDSHAKE_TIMEOUT)
+}
+
+fn open_with_timeout(ticket: &RelayTicket, path: &str, timeout: Duration) -> Result<Socket, String> {
     if !ticket.is_valid() {
         return Err("RELAY_TICKET_INVALID".to_string());
     }
@@ -174,15 +178,19 @@ fn open(ticket: &RelayTicket, path: &str) -> Result<Socket, String> {
         .map_err(|error| format!("RELAY_UNREACHABLE: {error}"))?
         .find_map(|address| TcpStream::connect_timeout(&address, CONNECT_TIMEOUT).ok())
         .ok_or_else(|| "RELAY_UNREACHABLE".to_string())?;
-    stream
-        .set_read_timeout(Some(HANDSHAKE_POLL))
-        .map_err(|error| error.to_string())?;
-    let deadline = Instant::now() + HANDSHAKE_TIMEOUT;
+    // Keep the same socket and handshake state across WouldBlock, including TLS.
+    let transport = stream.try_clone().map_err(|error| error.to_string())?;
+    transport.set_nonblocking(true).map_err(|error| error.to_string())?;
+    let deadline = Instant::now() + timeout;
     let mut attempt = tungstenite::client_tls_with_config(request, stream, None, None);
     loop {
         return match attempt {
-            Ok((socket, _)) => Ok(socket),
+            Ok((socket, _)) => {
+                transport.set_nonblocking(false).map_err(|error| error.to_string())?;
+                Ok(socket)
+            },
             Err(HandshakeError::Interrupted(pending)) if Instant::now() < deadline => {
+                thread::sleep(HANDSHAKE_POLL.min(deadline.saturating_duration_since(Instant::now())));
                 attempt = pending.handshake();
                 continue;
             }
@@ -513,11 +521,28 @@ mod tests {
         let url = format!("ws://{}/relay/v1", listener.local_addr().unwrap());
         thread::spawn(move || {
             let (stream, _) = listener.accept().unwrap();
-            thread::sleep(HANDSHAKE_POLL * 2 + std::time::Duration::from_millis(300));
+            thread::sleep(Duration::from_millis(2300));
             let _socket = tungstenite::accept(stream).unwrap();
             thread::sleep(std::time::Duration::from_secs(1));
         });
         assert!(open(&ticket(&url, SECRET), "mobile").is_ok(), "慢回应也要等到");
+    }
+
+    #[test]
+    fn a_relay_that_never_upgrades_hits_the_total_handshake_deadline() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let url = format!("ws://{}/relay/v1", listener.local_addr().unwrap());
+        let server = thread::spawn(move || {
+            let (_stream, _) = listener.accept().unwrap();
+            thread::sleep(Duration::from_millis(350));
+        });
+        let started = Instant::now();
+        let error = open_with_timeout(&ticket(&url, SECRET), "mobile", Duration::from_millis(100))
+            .unwrap_err();
+        assert_eq!(error, "RELAY_TIMEOUT");
+        assert!(started.elapsed() >= Duration::from_millis(100));
+        assert!(started.elapsed() < Duration::from_millis(350));
+        server.join().unwrap();
     }
 
     #[test]

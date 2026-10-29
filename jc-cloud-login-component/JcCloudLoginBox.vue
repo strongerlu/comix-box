@@ -148,14 +148,6 @@ function setAdvancedOpen(value: boolean) {
         <span class="mso">key</span>
         获取 Key
       </button>
-      <button class="jc-login-link" @click="open(`${normalizedApiBase}/wallet`)">
-        <span class="mso">group_add</span>
-        邀请赚米
-      </button>
-      <button class="jc-login-link" @click="open(`${normalizedApiBase}/profile`)">
-        <span class="mso">event_available</span>
-        白嫖签到
-      </button>
     </div>
 
     <button class="jc-login-save" :disabled="busy" @click="emit('save-key')">
@@ -169,7 +161,7 @@ function setAdvancedOpen(value: boolean) {
 
     <div v-if="loginDialogOpen" class="jc-login-overlay" @click.self="closeLoginDialog">
       <div class="jc-login-dialog">
-        <div class="jc-login-dialog-title">登录韭菜盒子账号</div>
+        <div class="jc-login-dialog-title">登录COMIC-BOX账号</div>
         <input v-model="loginUsername" class="jc-login-input" autocomplete="username" placeholder="账号 / 邮箱" />
         <input
           v-model="loginPassword"

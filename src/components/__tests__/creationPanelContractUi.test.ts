@@ -2,14 +2,27 @@ import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { test } from 'node:test'
+import { createRequire } from 'node:module'
+import { computed, effectScope, nextTick, reactive, ref, watch } from 'vue'
+
+import { creationTaskStage, matchesCreationTaskFilter, creationModelDisplayLabel } from '@/utils/creationPresentation'
+import { skillDisplayLabel } from '@/utils/skillDisplayLabel'
+import type { MediaTask } from '@/stores/mediaTaskStore'
 
 const root = process.cwd()
 
-test('创作面板历史入口显示为任务记录文字按钮', () => {
+test('创作工作区统一显示为创作智能体', () => {
   const source = readFileSync(join(root, 'src/components/creation/CreationPanel.vue'), 'utf8')
-  assert.match(source, /<button class="cp-toolbar-link" type="button" @click="openTaskHistory">任务记录<\/button>/)
+  assert.match(source, /class="cp-title-text">创作智能体<\/span>/)
+  assert.doesNotMatch(source, /class="cp-title-text">创作面板<\/span>/)
+})
+
+test('创作面板保留任务记录入口并显示正在运行的任务数', () => {
+  const source = readFileSync(join(root, 'src/components/creation/CreationPanel.vue'), 'utf8')
+  assert.match(source, /<button class="cp-toolbar-link"[^>]*aria-label="任务记录"[^>]*@click="openTaskHistory">/)
+  assert.match(source, /class="cp-toolbar-link-text">任务记录<\/span>/)
+  assert.match(source, /v-if="creationRunningCount > 0" class="cp-task-count"/)
   assert.doesNotMatch(source, /cp-toolbar-icon[^>]*@click="openTaskHistory"/)
-  assert.match(source, /\.cp-toolbar-link \{[\s\S]*?background: var\(--surface-alt\);/)
   assert.match(source, /class="cp-toolbar-link"[\s\S]*提示词参考/)
 })
 
@@ -1141,7 +1154,7 @@ test('submitted or failed video tasks can query the upstream result without resu
   assert.match(store, /canRefreshTaskResult,\n    init,/)
   assert.match(store, /refreshTaskResult,\n    retryMediaPersistence,/)
 
-  const refresh = store.match(/async function refreshTaskResultAllowed\(taskId: string\)[\s\S]*?\n  \}/)?.[0] || ''
+  const refresh = store.match(/async function refreshTaskResult\(taskId: string\)[\s\S]*?\n  \}/)?.[0] || ''
   assert.ok(refresh, 'refreshTaskResult body should be found')
   assert.doesNotMatch(refresh, /submitTask|generateVideo|generateImage|generateAudio/)
   assert.match(refresh, /await completeMediaTask\(task, mediaUrl, 'refresh-result'\)/)
@@ -1235,4 +1248,124 @@ test('创作面板「复制参数」与 @影音 的粘贴解析成对', () => {
   assert.match(workbench, /applyMediaParamsToPlan, parseMediaParamsText/)
   // 两条建 plan 的路径都要覆盖：加载历史对话 + 流式完成后
   assert.equal((workbench.match(/applyPastedMediaParams\(plans, userText\)/g) || []).length, 2)
+})
+
+
+test('task stage distinguishes generation, download and actual persistence without mutating tasks', () => {
+  const cases: Array<[Partial<MediaTask>, string]> = [
+    [{ status: 'pending' }, '排队中'], [{ status: 'running' }, '生成中'],
+    [{ status: 'failed' }, '生成失败'], [{ status: 'cancelled' }, '已取消'],
+    [{ status: 'success' }, '已生成 · 待保存'],
+    [{ status: 'success', downloadState: 'queued', assetStatus: 'pending' }, '等待下载'],
+    [{ status: 'success', downloadState: 'downloading', assetStatus: 'pending' }, '下载中'],
+    [{ status: 'cancelled', downloadState: 'paused', assetStatus: 'failed' }, '下载已暂停'],
+    [{ status: 'success', downloadState: 'failed', assetStatus: 'failed' }, '下载失败'],
+    [{ status: 'success', assetStatus: 'failed' }, '保存失败'],
+    [{ status: 'success', assetStatus: 'pending' }, '保存中'],
+    [{ status: 'success', downloadState: 'complete' }, '已生成 · 待保存'],
+    [{ status: 'success', assetStatus: 'local', projectPath: '图片/result.png' }, '已保存'],
+    [{ status: 'success', assetUri: 'F:/project/result.png', canvasWriteStatus: 'unwritten' }, '已保存 · 未加入画布'],
+  ]
+  for (const [input, stage] of cases) {
+    const task = Object.freeze(input) as MediaTask
+    assert.equal(creationTaskStage(task), stage)
+    assert.equal(matchesCreationTaskFilter(task, 'all'), true)
+  }
+  assert.equal(matchesCreationTaskFilter({ status: 'success', downloadState: 'downloading' } as MediaTask, 'active'), true)
+  assert.equal(matchesCreationTaskFilter({ status: 'success', downloadState: 'complete' } as MediaTask, 'saved'), false)
+  assert.equal(matchesCreationTaskFilter({ status: 'success', assetStatus: 'failed' } as MediaTask, 'attention'), true)
+  assert.equal(matchesCreationTaskFilter({ status: 'success', projectPath: 'result.png', canvasWriteStatus: 'unwritten' } as MediaTask, 'attention'), true)
+})
+
+test('friendly labels preserve explicit display names and unknown identifiers', () => {
+  assert.equal(skillDisplayLabel('jc-novel', 'jc-novel'), '小说创作')
+  assert.equal(skillDisplayLabel('jc-novel', '我的小说助手'), '我的小说助手')
+  assert.equal(skillDisplayLabel('custom-skill'), 'custom-skill')
+  assert.equal(creationModelDisplayLabel('xy-grok-imagine-image-2.0'), 'Grok Image 2.0 · 小易')
+  assert.equal(creationModelDisplayLabel('xy-gpt-image-2.5-flare-1k'), 'GPT Image 2.5 flare · 1K · 小易')
+  assert.equal(creationModelDisplayLabel('xy-gpt-image-2.5-sunburst-1k'), 'GPT Image 2.5 sunburst · 1K · 小易')
+  assert.equal(creationModelDisplayLabel('future-provider-v3'), 'future-provider-v3')
+})
+
+
+test('history thumbnails keep frozen project ownership and release stale asynchronous display leases', async () => {
+  const source = readFileSync(join(root, 'src/components/creation/CreationTaskThumbnail.vue'), 'utf8')
+  const body = source.slice(source.indexOf('watch(() =>'), source.indexOf('</script>'))
+  const { transformSync } = createRequire(join(root, 'package.json'))('esbuild')
+  const props = reactive({ task: { id: 'old', type: 'image', directory: 'F:/original', projectPath: 'old.png' } })
+  const url = ref('')
+  const requestedOwners: string[] = []
+  const pending: Array<(lease: { url: string; release(): void }) => void> = []
+  const releases: string[] = []
+  const stop = new Function('watch', 'props', 'url', 'projectResourceForMediaTask', 'acquireProjectMediaDisplay', 'resolveProjectVideoThumbnail',
+    transformSync('return ' + body, { loader: 'ts' }).code)(watch, props, url,
+    (task: typeof props.task) => { requestedOwners.push(task.directory); return { runtime: 'desktop', owner: task.directory, path: task.projectPath } },
+    () => new Promise(resolve => pending.push(resolve)),
+    () => { throw new Error('image thumbnails must not start video work') },
+  )
+  props.task = { id: 'new', type: 'image', directory: 'F:/second', projectPath: 'new.png' }
+  await nextTick()
+  pending[1]!({ url: 'asset:new', release: () => releases.push('new') })
+  await Promise.resolve()
+  assert.equal(url.value, 'asset:new')
+  pending[0]!({ url: 'asset:old', release: () => releases.push('old') })
+  await Promise.resolve()
+  assert.equal(url.value, 'asset:new')
+  assert.deepEqual(requestedOwners, ['F:/original', 'F:/second'])
+  assert.deepEqual(releases, ['old'])
+  stop()
+  assert.deepEqual(releases, ['old', 'new'])
+})
+
+
+test('history filters and search keep pagination in range and preserve original task objects', async () => {
+  const source = readFileSync(join(root, 'src/components/creation/CreationPanel.vue'), 'utf8')
+  const block = source.slice(source.indexOf('const taskFilter ='), source.indexOf('function pad('))
+  const { transformSync } = createRequire(join(root, 'package.json'))('esbuild')
+  const tasks = ref(Array.from({ length: 45 }, (_, index) => ({ id: `task-${index}`, status: index === 0 ? 'failed' : 'success', projectPath: index ? `图片/${index}.png` : undefined, prompt: index === 0 ? 'retry-me' : 'landscape', model: 'test-model' })))
+  const scope = effectScope()
+  const state = scope.run(() => new Function('computed', 'ref', 'watch', 'creationTasks', 'matchesCreationTaskFilter', 'creationTaskStage',
+    transformSync(block, { loader: 'ts' }).code + '; return { taskFilter, taskSearch, taskPageSize, taskPage, totalTaskPages, pagedCreationTasks, creationTasksTotal }'
+  )(computed, ref, watch, tasks, matchesCreationTaskFilter, creationTaskStage))
+  state.taskPage.value = 3
+  assert.equal(state.pagedCreationTasks.value[0], tasks.value[40])
+  state.taskFilter.value = 'attention'
+  await nextTick()
+  assert.equal(state.taskPage.value, 1)
+  assert.equal(state.creationTasksTotal.value, 1)
+  assert.equal(state.pagedCreationTasks.value[0], tasks.value[0])
+  state.taskSearch.value = 'no-match'
+  await nextTick()
+  assert.equal(state.creationTasksTotal.value, 0)
+  assert.equal(state.totalTaskPages.value, 1)
+  state.taskFilter.value = 'all'
+  state.taskSearch.value = ''
+  state.taskPageSize.value = 10
+  await nextTick()
+  assert.equal(state.pagedCreationTasks.value.length, 10)
+  assert.equal(tasks.value.length, 45)
+  scope.stop()
+})
+
+
+test('empty canvas guidance follows actual scene content including annotations and undo clearing', () => {
+  const source = readFileSync(join(root, 'src/components/creation/CreationPanel.vue'), 'utf8')
+  const body = source.match(/function syncCanvasContentHint\(\) \{[\s\S]*?\n\}/)?.[0]
+  assert.ok(body)
+  const app = { tree: { children: [] as Array<{ tag: string }> } }
+  const canvasHasContent = ref(false)
+  const sync = new Function('app', 'canvasHasContent', body + '; return syncCanvasContentHint')(app, canvasHasContent)
+  sync()
+  assert.equal(canvasHasContent.value, false)
+  app.tree.children.push({ tag: 'SimulateElement' })
+  sync()
+  assert.equal(canvasHasContent.value, false)
+  app.tree.children.push({ tag: 'Text' })
+  sync()
+  assert.equal(canvasHasContent.value, true)
+  app.tree.children = []
+  sync()
+  assert.equal(canvasHasContent.value, false)
+  assert.match(source, /app\.tree\.on_\(RenderEvent\.END, syncCanvasContentHint\)/)
+  assert.match(source, /cp-canvas-welcome \{[^}]*pointer-events: none/)
 })

@@ -32,24 +32,26 @@ const isTauri = isTauriRuntime()
 // Boot theme from localStorage (flicker-free)
 try {
   const memoryThemeInitialized = localStorage.getItem('jcMemoryThemeInitialized') === '1'
-  const theme = String(!isTauri && !memoryThemeInitialized
-    ? 'green'
-    : localStorage.getItem('jcTheme') || '').toLowerCase()
+  const storedTheme = String(localStorage.getItem('jcTheme') || '').toLowerCase()
+  const theme = !isTauri && !memoryThemeInitialized
+    ? 'light'
+    : ['light', 'dark', 'aurora'].includes(storedTheme)
+      ? storedTheme
+      : storedTheme === 'dracula' ? 'dark' : 'light'
   if (!isTauri && !memoryThemeInitialized) {
-    localStorage.setItem('jcTheme', 'green')
+    localStorage.setItem('jcTheme', 'light')
     localStorage.setItem('jcMemoryThemeInitialized', '1')
   }
-  // 只有 light 用 :root 默认值；其余主题（含 white）都要提前写 data-theme，否则启动会闪一下默认配色
+  if (storedTheme && storedTheme !== theme) localStorage.setItem('jcTheme', theme)
+  // 暖昼用 :root 默认值；曜石与极光提前写入 data-theme，避免启动闪色。
   if (theme && theme !== 'light') {
     document.documentElement.setAttribute('data-theme', theme)
   }
 } catch (_) {}
 
 try {
-  const fontSize = Number(localStorage.getItem('jcFontSize'))
-  if (Number.isFinite(fontSize) && fontSize > 0) {
-    document.documentElement.style.setProperty('--font-base', `${fontSize}px`)
-  }
+  localStorage.removeItem('jcFontSize')
+  document.documentElement.style.removeProperty('--font-base')
 } catch (_) {}
 
 // Clean up jcApiBase if it has /api suffix

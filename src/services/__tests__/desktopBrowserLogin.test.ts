@@ -24,7 +24,7 @@ test('buildDesktopBrowserLoginUrl creates gateway start URL with deep-link redir
 
   assert.equal(url.origin, 'https://api.jiucaihezi.studio')
   assert.equal(url.pathname, '/auth/desktop/start')
-  assert.equal(url.searchParams.get('redirect'), 'jiucaihezi://auth/callback')
+  assert.equal(url.searchParams.get('redirect'), 'comic-box://auth/callback')
 
   const state = String(url.searchParams.get('state') || '')
   const intent = JSON.parse(String(storage.getItem(API_KEY_CALLBACK_INTENT_STORAGE_KEY)))

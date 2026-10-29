@@ -24,8 +24,14 @@ compatibility: Portable to any agent that can read local files — no external A
 - 换装角色用其造型资产作一张 `<Picture N>` 并写全名（如 `<Subject 1> is 顾云舟·帝王 from <Picture 1>`），不另放服装图。
 - 人群用已登记的群像图作一张 `<Picture N>`（如 `<Subject 4> is the 太虚宗弟子 crowd from <Picture 4>`），镜头里写明人数与队形（如 “over one thousand disciples stand in a square formation behind <Subject 1>”），群像图只锁定服制与外观。
 - `subject_definitions` 每张图单独一行并写出资产名，例如 `<Subject 1> is 顾云舟 from <Picture 1>, ...`、`<Picture 2> is the environment reference for 后山石道, ...`，名称与资产档案一致。
+- 多视图参考只提供同一实体的身份或几何：人物三格中的正面、背面和脸部属于同一个人，不能变成多个演员；道具六视图不带入分格、标签和底色。成片画幅与媒介沿用已确认项目风格，参考图的三维材质不能覆盖二维成片设定。把这些取舍写入 retention_analysis 和 detailed_description，并明确本段实际入画人物数量。
+- 场景图与道具图重叠展示同一实物时，继承[同物关系](../jc-xiangmuziliao/SKILL.md#场景与道具的同物关系)，在 subject_definitions 的场景行与道具行明确它们共同指向同一个实物：场景图锁位置，道具图补外观；仅补关系时保持现有 Picture 编号和 refs，不另造一个道具主体。retention_analysis 写清保留的场内位置、实际数量及舍弃的重复摆放，detailed_description 各镜按该位置取景；固定物体的特写改变相机，不另添前景副本。真实多个同类物仍按资料逐个区分，不默认全片只有一件。
+- 实际审片仍出现重复实物，且场景参考已足以呈现本段所需道具时，在局部重做范围内减少该段重复的独立道具参考，改由场景图统一承载身份与位置；同步修改正文 Picture 引用及检查点有序 refs，重新校验，不只删图片参数。保留道具档案、已锁定图片及无关片段，不把本次实测推为所有项目都不带道具图。
 - 每段都写清参考图与角色空间关系：谁在画面哪一侧、距离、朝向、视线、持物，以及场景地标的位置；不能只写“沿用上一段”。每段独立可提交，时间从0起，时长不超过指令上限。
+- 参考图提供身份与环境时，明确它是否也约束构图，避免人物设定图的正面或特写构图替换工程稿景别。连续表演不需要切镜时只写一个 Shot，在镜内安排动作时间；确需切镜才另编号。局部动作分别说明活动部位与保持不动的部位，并核对首帧位置、人物尺度和末态能否接到相邻段；不把“回望”等动词自动扩成全身转向。
+- 按[工程剧本的时序与跨镜连续性](../jc-gongchengjuben/SKILL.md#时序与跨镜连续性)转写：subject_definitions 与 retention_analysis 区分稳定身份和随剧情变化的状态，不能把某镜的结果覆盖全段；summary、detailed_description、overall_soundscape、non_diegetic_music 使用同一事件顺序与状态边界。逐镜时间在本段内递增并覆盖目标长度，来源全片时间先减段起点；同步动作、持续变化和原稿明确的非顺叙按原意保留，不套固定等待秒数。
 - 角色声音按人物声音档案写进对白与 soundscape；不写制作备注、上传说明或预算。
+- 声音承接以已确认工程稿和当前用户要求为依据；没有来源的配乐不能写成“继续上一段音乐”。用户要求静音、无配乐或只留环境声时，逐节检查 summary、retention_analysis、detailed_description 与两节声音描述，去掉冲突，不只修改 non_diegetic_music。已有明确音乐设计的项目仍按其要求保留。
 
 ## Workflow
 

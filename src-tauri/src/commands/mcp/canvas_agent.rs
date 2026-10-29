@@ -217,8 +217,6 @@ pub async fn canvas_agent_connect(
     realm: String,
     timeout_ms: u64,
 ) -> Result<CanvasStatus, String> {
-    #[cfg(not(any(target_os = "ios", target_os = "android")))]
-    let _update_task = crate::commands::desktop_update::native_task(window.app_handle(), "连接画布")?;
     let _start = START.lock().await;
     if window.get_webview_window(window.label()).is_none() {
         return Err("画布连接已取消".into());
@@ -567,45 +565,4 @@ mod tests {
         assert!(bridge.handle.is_none());
     }
 
-    #[cfg(unix)]
-    #[tokio::test]
-    async fn owned_bridge_survives_one_window_and_is_killed_after_the_last_lease() {
-        let mut command = tokio::process::Command::new("/bin/sleep");
-        command
-            .arg("30")
-            .stdin(std::process::Stdio::piped())
-            .process_group(0)
-            .kill_on_drop(true);
-        let mut child = command.spawn().unwrap();
-        let pid = child.id().unwrap();
-        let stdin = std::sync::Arc::new(tokio::sync::Mutex::new(child.stdin.take().unwrap()));
-        let handle = format!("test-canvas-{}", uuid::Uuid::new_v4());
-        lock_processes().insert(
-            handle.clone(),
-            super::super::McpStdioProcess {
-                pid,
-                child,
-                stdin,
-                is_harness_runner: false,
-                owner: None,
-            },
-        );
-        let mut bridge = Bridge {
-            handle: Some(handle.clone()),
-            leases: HashMap::new(),
-        };
-        bridge.leases.insert(
-            "other-window".into(),
-            Owner {
-                window: "b".into(),
-                realm: "r".into(),
-            },
-        );
-        stop_if_unused(&mut bridge);
-        assert!(lock_processes().contains_key(&handle));
-        bridge.leases.clear();
-        stop_if_unused(&mut bridge);
-        assert!(!lock_processes().contains_key(&handle));
-        assert!(bridge.handle.is_none());
-    }
 }

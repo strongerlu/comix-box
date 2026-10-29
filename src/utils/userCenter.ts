@@ -12,14 +12,6 @@ export function normalizeTopupAmount(value: unknown): number {
   return amount
 }
 
-export function buildInviteUrl(baseUrl: string, inviteCode: string): string {
-  const fallback = typeof window !== 'undefined' ? window.location.href : 'https://jiucaihezi.studio/'
-  const url = new URL(String(baseUrl || fallback))
-  url.searchParams.set('aff', String(inviteCode || '').trim())
-  url.hash = 'register'
-  return url.toString()
-}
-
 function formatLogTime(value: unknown): string {
   if (typeof value === 'number' && Number.isFinite(value)) {
     const millis = value > 100000000000 ? value : value * 1000
@@ -52,8 +44,7 @@ export function formatUsageLogItem(item: any): UsageLogRow {
   const type = String(item?.type || item?.channel || '').toLowerCase()
   const modelName = String(item?.model || item?.modelName || item?.channel || item?.type || '未知模型').trim()
   const title = String(item?.title || '').trim() || (
-    type.includes('checkin') ? '签到奖励'
-      : type.includes('redeem') ? '兑换码到账'
+    type.includes('redeem') ? '兑换码到账'
         : type.includes('topup') ? '充值到账'
           : modelName || '模型消耗'
   )

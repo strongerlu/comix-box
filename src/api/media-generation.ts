@@ -1,4 +1,5 @@
 import { validateCreationR2Grant, assertNoLegacyCreationOssReference } from '@/utils/creationR2Upload'
+import { isTauriRuntime } from '@/utils/tauriEnv'
 /**
  * api/media-generation.ts — 云端媒体生成（统一走 NewAPI）
  *
@@ -127,7 +128,7 @@ let _cachedConfig: { apiKey: string; apiBase: string } | null = null
 async function ensureConfig(): Promise<{ apiKey: string; apiBase: string }> {
   if (_cachedConfig) return _cachedConfig
   const apiKey = getApiKey()
-  if (!apiKey) throw new Error('请先在设置中登录韭菜盒子账号')
+  if (!apiKey) throw new Error('请先在设置中登录COMIC-BOX账号')
   _cachedConfig = { apiKey, apiBase: DEFAULT_API_BASE_URL }
   setTimeout(() => { _cachedConfig = null }, 30000)
   return _cachedConfig
@@ -140,6 +141,8 @@ async function ensureConfig(): Promise<{ apiKey: string; apiBase: string }> {
 }
 
 function getApiBase(): string {
+  // 桌面开发版也走原生 HTTP；只有浏览器预览需要 Vite 代理绕开 CORS。
+  if (isTauriRuntime()) return _cachedConfig?.apiBase || DEFAULT_API_BASE_URL
   // CLAUDE.md §0.3 铁律：localhost 必须走 Vite proxy /__jc_api 绕开 CORS
   // 否则 /rh/tasks/* 等未配 CORS 的端点会被浏览器拦截
   // ⚠️ Tauri 桌面端 origin 因平台而异，必须排除：
@@ -547,7 +550,7 @@ export async function apiCall(path: string, body: any | null, method = 'POST', m
   if (apiKeyOverride && method !== 'GET') throw new Error('任务密钥仅用于查询')
   if (!apiKeyOverride) await ensureConfig()
   const key = apiKeyOverride || storedApiKey()
-  if (!key) throw new Error('请先登录韭菜盒子账号')
+  if (!key) throw new Error('请先登录COMIC-BOX账号')
   const headers = apiKeyOverride ? { 'Content-Type': 'application/json', Authorization: `Bearer ${key}`, 'x-api-key': key } : model ? authHeadersFor(model) : authHeaders()
   const opts: RequestInit = { method, headers }
   if (method !== 'GET' && body) opts.body = JSON.stringify(body)
@@ -561,36 +564,36 @@ export async function apiCall(path: string, body: any | null, method = 'POST', m
   let res: Response
   try {
     res = await safeFetch(fullUrl, opts)
+    throwIfAborted(externalSignal)
+    console.log('[apiCall] response status:', res.status)
+    if (!res.ok) {
+      if (res.status === 429) {
+        throw new Error('请求过于频繁，请稍后再试')
+      }
+      if (res.status === 503) {
+        const text = await res.text().catch(() => '')
+        if (text.includes('model_not_found') || text.includes('无可用渠道')) {
+          throw new Error(`该模型对应的 NewAPI 渠道暂不可用或无可用渠道，请检查后台渠道状态后再试：${text.slice(0, 200)}`)
+        }
+        throw new Error(text.trim() ? `HTTP 503: ${mediaHttpErrorDetail(text)}` : '服务暂时不可用 (503)，请稍后再试')
+      }
+      const text = await res.text().catch(() => '')
+      throw new Error(`HTTP ${res.status}: ${mediaHttpErrorDetail(text)}`)
+    }
+    const json = await res.json()
+    console.log('[apiCall] response data keys:', Object.keys(json), 'data[0]:', json?.data?.[0] ? JSON.stringify(json.data[0]).slice(0,200) : 'no data')
+    // ★ 检测上游返回的业务错误（HTTP 200 但实际失败）
+    checkUpstreamError(json)
+    return json
   } finally {
     clear()
   }
-  throwIfAborted(externalSignal)
-  console.log('[apiCall] response status:', res.status)
-  if (!res.ok) {
-    if (res.status === 429) {
-      throw new Error('请求过于频繁，请稍后再试')
-    }
-    if (res.status === 503) {
-      const text = await res.text().catch(() => '')
-      if (text.includes('model_not_found') || text.includes('无可用渠道')) {
-        throw new Error(`该模型对应的 NewAPI 渠道暂不可用或无可用渠道，请检查后台渠道状态后再试：${text.slice(0, 200)}`)
-      }
-      throw new Error(text.trim() ? `HTTP 503: ${mediaHttpErrorDetail(text)}` : '服务暂时不可用 (503)，请稍后再试')
-    }
-    const text = await res.text().catch(() => '')
-    throw new Error(`HTTP ${res.status}: ${mediaHttpErrorDetail(text)}`)
-  }
-  const json = await res.json()
-  console.log('[apiCall] response data keys:', Object.keys(json), 'data[0]:', json?.data?.[0] ? JSON.stringify(json.data[0]).slice(0,200) : 'no data')
-  // ★ 检测上游返回的业务错误（HTTP 200 但实际失败）
-  checkUpstreamError(json)
-  return json
 }
 
 export async function apiCallBinary(path: string, body: unknown, model?: string, externalSignal?: AbortSignal): Promise<string> {
   throwIfAborted(externalSignal)
   await ensureConfig()
-  if (!storedApiKey()) throw new Error('请先登录韭菜盒子账号')
+  if (!storedApiKey()) throw new Error('请先登录COMIC-BOX账号')
   const { signal, clear } = createTimeoutSignal(300, externalSignal)
   let res: Response
   try {
@@ -600,18 +603,18 @@ export async function apiCallBinary(path: string, body: unknown, model?: string,
       body: JSON.stringify(body),
       signal,
     })
+    throwIfAborted(externalSignal)
+    if (!res.ok) throw new Error(`HTTP ${res.status}: ${mediaHttpErrorDetail(await res.text().catch(() => ''))}`)
+    const mime = (res.headers.get('content-type') || 'audio/mpeg').split(';')[0]
+    const bytes = new Uint8Array(await res.arrayBuffer())
+    let binary = ''
+    for (let i = 0; i < bytes.length; i += 0x8000) {
+      binary += String.fromCharCode(...bytes.subarray(i, i + 0x8000))
+    }
+    return `data:${mime};base64,${btoa(binary)}`
   } finally {
     clear()
   }
-  throwIfAborted(externalSignal)
-  if (!res.ok) throw new Error(`HTTP ${res.status}: ${mediaHttpErrorDetail(await res.text().catch(() => ''))}`)
-  const mime = (res.headers.get('content-type') || 'audio/mpeg').split(';')[0]
-  const bytes = new Uint8Array(await res.arrayBuffer())
-  let binary = ''
-  for (let i = 0; i < bytes.length; i += 0x8000) {
-    binary += String.fromCharCode(...bytes.subarray(i, i + 0x8000))
-  }
-  return `data:${mime};base64,${btoa(binary)}`
 }
 
 /**
@@ -686,7 +689,7 @@ export async function apiCallMultipart(path: string, fields: Record<string, stri
   throwIfAborted(externalSignal)
   await ensureConfig()
   const key = storedApiKey()
-  if (!key) throw new Error('请先登录韭菜盒子账号')
+  if (!key) throw new Error('请先登录COMIC-BOX账号')
   const formData = new FormData()
   for (const [k, v] of Object.entries(fields)) {
     if (Array.isArray(v)) {
@@ -709,20 +712,20 @@ export async function apiCallMultipart(path: string, fields: Record<string, stri
       body: formData,
       signal,
     })
+    throwIfAborted(externalSignal)
+    if (!res.ok) {
+      const text = await res.text().catch(() => '')
+      if (res.status === 503 && !text.trim()) {
+        throw new Error('服务暂时不可用 (503)，请稍后再试')
+      }
+      throw new Error(`HTTP ${res.status}: ${mediaHttpErrorDetail(text)}`)
+    }
+    const json = await res.json()
+    checkUpstreamError(json)
+    return json
   } finally {
     clear()
   }
-  throwIfAborted(externalSignal)
-  if (!res.ok) {
-    const text = await res.text().catch(() => '')
-    if (res.status === 503 && !text.trim()) {
-      throw new Error('服务暂时不可用 (503)，请稍后再试')
-    }
-    throw new Error(`HTTP ${res.status}: ${mediaHttpErrorDetail(text)}`)
-  }
-  const json = await res.json()
-  checkUpstreamError(json)
-  return json
 }
 
 /** 过滤请求期图片来源；blob/asset 只在同一请求边界内使用。 */
@@ -1170,7 +1173,7 @@ export async function generateAudio(
   assertMediaModelExecutable(model, 'audio')
   await ensureConfig()
   const key = storedApiKey()
-  if (!key) throw new Error('请先登录韭菜盒子账号')
+  if (!key) throw new Error('请先登录COMIC-BOX账号')
 
   const capability = getMediaModel(model)
   if (capability?.provider === 'gateway-audio' && capability.webappId?.startsWith('rhart-audio/')) {

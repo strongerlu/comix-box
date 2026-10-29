@@ -83,9 +83,9 @@ class ReleaseR2Tests(unittest.TestCase):
             for name in names:
                 (root / name).write_bytes(name.encode())
             checksum = ''.join(hashlib.sha256(name.encode()).hexdigest() + '  ' + name + '\n' for name in names)
-            (root / 'SHA256SUMS').write_text(checksum)
+            (root / 'SHA256SUMS').write_bytes(checksum.encode())
             checksum += hashlib.sha256(checksum.encode()).hexdigest() + '  SHA256SUMS\n'
-            (root / 'R2-SHA256SUMS').write_text(checksum)
+            (root / 'R2-SHA256SUMS').write_bytes(checksum.encode())
             files = self.upload.inventory(root)
             self.assertEqual({p.name for p in files}, set(names + ['SHA256SUMS', 'R2-SHA256SUMS']))
             (root / names[3]).unlink()

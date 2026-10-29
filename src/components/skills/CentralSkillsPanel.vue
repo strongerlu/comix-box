@@ -462,7 +462,7 @@ onMounted(() => {
           <header>
             <div>
               <h3>编辑显示别名</h3>
-              <p>显示别名只影响韭菜盒子界面，不修改官方 Skill name。</p>
+              <p>显示别名只影响COMIC-BOX界面，不修改官方 Skill name。</p>
             </div>
             <button type="button" title="关闭" @click="aliasEditingSkill = null">
               <JcIcon name="close" />

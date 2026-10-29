@@ -184,7 +184,7 @@ Content-Type: application/json
 
 {
   "model": "rh-speech-hd",
-  "prompt": "你好，欢迎使用韭菜盒子",
+  "prompt": "你好，欢迎使用COMIC-BOX",
   "language": "zh"
 }
 ```

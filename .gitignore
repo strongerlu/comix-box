@@ -2,6 +2,7 @@
 node_modules/
 src-tauri/resources/deepseek-harness/node_modules/
 rh-adapter/.venv/
+.venv/
 
 # Build
 dist/
@@ -13,6 +14,7 @@ gateway/assets/
 public/landing/*.dmg
 __pycache__/
 *.pyc
+*.tsbuildinfo
 
 # Editor
 .vscode/
@@ -29,6 +31,12 @@ Thumbs.db
 .env
 .env.local
 .env.*.local
+# 每台电脑的环境配置；无真实凭据的示例和模板仍可共享。
+.env.*
+!.env.example
+!.env.*.example
+!.env.template
+!.env.*.template
 
 # Tauri
 src-tauri/gen/
@@ -44,6 +52,11 @@ jc-media/
 .raw/
 .git.backup/
 .superpowers/
+# 本地样片、生成素材、验收输出和临时脚本：保留原文件，不随源码同步。
+# 其中包含真实创作项目；清理忽略文件前必须另做备份。
+/tmp/
+/.cache/
+/.comic-box/
 # Playwright MCP 的默认输出目录：每次浏览器快照/截图都会往这写无障碍树和控制台日志
 .playwright-mcp/
 
@@ -51,3 +64,4 @@ jc-media/
 /build-app.log
 /bundle-app.log
 /bundle-nsis.log
+/*.log

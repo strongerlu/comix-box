@@ -313,7 +313,7 @@ export function buildOfficeCreateSpec(docType: OfficeDocType, content: string): 
 
     return {
       title,
-      subtitle: '由韭菜盒子生成',
+      subtitle: '由COMIC-BOX生成',
       theme: 'midnight',
       slides: toSlides(content),
     }

@@ -110,12 +110,17 @@ export function getLocalCapabilities(): LocalCapability[] {
       description: '视频/音频转码、压缩、提取音频',
       critical: false,
       check: async () => {
-        const stored = localStorage.getItem('jc_ffmpeg_checked')
-        return stored === 'true'
+        if (!isTauriRuntime()) return false
+        try {
+          const { invoke } = await import('@tauri-apps/api/core')
+          await invoke('dev_check_ffmpeg')
+          return true
+        } catch { return false }
       },
       setup: async () => {
-        localStorage.setItem('jc_ffmpeg_checked', 'true')
-        window.dispatchEvent(new CustomEvent('jc-open-ffmpeg-setup'))
+        if (!isTauriRuntime()) throw new Error('请在 Windows 桌面版中配置 FFmpeg。')
+        const { invoke } = await import('@tauri-apps/api/core')
+        await invoke('dev_check_ffmpeg')
       },
     },
     {

@@ -48,7 +48,7 @@ function isTrustedApiKeyCallbackUrl(href: string): boolean {
   try {
     const url = new URL(String(href || ''), 'tauri://localhost/index.html')
     if (url.protocol === 'tauri:' && url.hostname === 'localhost') return true
-    return url.protocol === 'jiucaihezi:' && url.hostname === 'auth' && url.pathname === '/callback'
+    return url.protocol === 'comic-box:' && url.hostname === 'auth' && url.pathname === '/callback'
   } catch {
     return false
   }

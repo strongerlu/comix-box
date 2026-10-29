@@ -9,6 +9,10 @@ const OUTPUT_SCHEMA = {
     path: { type: 'string', required: true },
     operation: { type: 'string', enum: ['created', 'updated', 'unchanged'], required: true },
     warnings: { type: 'array', items: { type: 'string' }, required: true },
+    checkpoint: { type: 'object', properties: {
+      stage: { type: 'string', required: true }, status: { type: 'string', required: true },
+      duration_seconds: { type: 'number' }, segment_count: { type: 'integer', required: true },
+    }, additionalProperties: false },
   },
   additionalProperties: false,
 }
@@ -654,11 +658,21 @@ async function saveArtifact(ctx, args, exec, contract, route, sourceAgent) {
     spec = legacySpec
   }
   spec.precise = Boolean(layout)
-  if (legacySpec && legacySpec.path !== spec.path) {
+  if (args.target_path !== undefined) {
+    if (args.write_mode !== 'update') throw new Error('target_path 只用于 write_mode=update，选择已有版本')
+    const selected = [spec, legacySpec].find(candidate => candidate && `${wikiRoot}/${candidate.path}` === args.target_path)
+    if (!selected || (await ctx.fs.stat(await projectTarget(ctx, cwd, args.target_path, exec.signal, workspace), exec.signal))?.type !== 'file')
+      throw new Error('target_path 必须是当前产物类型对应的已有新目录或旧目录文件完整路径')
+    const target = await projectTarget(ctx, cwd, args.target_path, exec.signal, workspace)
+    const prior = wikiReads.get(sourceAgent)?.get(target.targetKey ?? target)
+    if (!prior || JSON.stringify(prior.version) !== JSON.stringify((await ctx.fs.stat(target, exec.signal))?.version))
+      throw new Error('请先读取 target_path 指定文件的当前版本；修改后必须重新读取')
+    spec = { ...selected, precise: selected.path === spec.path && Boolean(layout) }
+  } else if (legacySpec && legacySpec.path !== spec.path) {
     const oldFile = await ctx.fs.stat(await projectTarget(ctx, cwd, `${wikiRoot}/${legacySpec.path}`, exec.signal, workspace), exec.signal)
     if (oldFile) {
       const newFile = await ctx.fs.stat(await projectTarget(ctx, cwd, `${wikiRoot}/${spec.path}`, exec.signal, workspace), exec.signal)
-      if (newFile) throw new Error('新旧产物同时存在，请明确当前版本，未覆盖任一文件')
+      if (newFile) throw new Error(`新旧产物同时存在，未覆盖任一文件；请先读取当前版本，再用 write_mode=update 和 target_path 选择 ${wikiRoot}/${spec.path} 或 ${wikiRoot}/${legacySpec.path}`)
       spec = { ...legacySpec, precise: false }
     }
   }
@@ -703,11 +717,16 @@ async function saveArtifact(ctx, args, exec, contract, route, sourceAgent) {
   }
   const warnings = [...(saved.warnings || []), ...indexWarnings]
   if (warnings.length) console.warn('[wiki-memory] saved with warnings:', warnings)
+  const checkpoint = spec.mode === 'pipeline' ? JSON.parse(await ctx.fs.readText(
+    await projectTarget(ctx, cwd, saved.path, exec.signal, workspace), exec.signal)) : undefined
   return {
     status: warnings.length ? 'saved_with_warnings' : 'saved',
     path: saved.path,
     operation: saved.operation,
     warnings,
+    ...(checkpoint && { checkpoint: { stage: checkpoint.stage, status: checkpoint.status,
+      ...(checkpoint.duration_seconds !== undefined && { duration_seconds: checkpoint.duration_seconds }),
+      segment_count: checkpoint.segments?.length ?? 0 } }),
   }
 }
 
@@ -809,7 +828,9 @@ async function requirePipelineReads(ctx, args, exec, agent) {
         if (path.includes(`/分镜提示词/${args.video_model}/第${args.episode_number}集`) && await observed(path)) paths.push(path)
       }
     }
-    if (!paths.length || !(await Promise.all(paths.map(observed))).some(Boolean))
+    if (!paths.length)
+      throw new Error(`前置资料未登记（${rule}${entity ? `：${entity}` : ''}）：请从正式 plan 阶段重新核对，在 materials 检查点登记对应资料，再续做 style/assets；反复read未登记文件不能补齐此依赖。不能跳过校验。`)
+    if (!(await Promise.all(paths.map(observed))).some(Boolean))
       throw new Error(`精准读取缺失或已过期（${rule}）：先用read读取对应Wiki正文再生成。候选：${paths.join('、') || '请先补齐对应项目资料'}。刚写入和聊天记忆不能代替读取。`)
   }
 }
@@ -820,6 +841,10 @@ async function pipelineCheckpoint(ctx, args, exec, cwd, workspace, wikiRoot, spe
   const input = JSON.parse(content)
   const stage = pipelineStages.indexOf(input.stage)
   if (stage < 0 || !Array.isArray(input.outputs)) throw new Error('流水线进度需要有效stage和outputs数组')
+  if (pipelineStages.some(name => Object.hasOwn(input, name)))
+    throw new Error('流水线字段（包括 segments）应放在 content JSON 根对象，与 stage、outputs 同级；不要添加阶段名包装层')
+  if (input.stage === 'prompts' && !Object.hasOwn(input, 'segments'))
+    throw new Error('修订视频提示词时必须显式提供根对象 segments，不能继承旧片段列表')
   const target = await projectTarget(ctx, cwd, `${wikiRoot}/${spec.path}`, exec.signal, workspace)
   const previous = await ctx.fs.stat(target, exec.signal) ? JSON.parse(await ctx.fs.readText(target, exec.signal)) : undefined
   // 审片修改（2026-10-26）：已完成的集可从 engineering 或 prompts 重开，沿用已登记的项目资料、风格与资产。
@@ -906,6 +931,10 @@ async function pipelineCheckpoint(ctx, args, exec, cwd, workspace, wikiRoot, spe
     if (!Array.isArray(segments) || !segments.length) throw new Error('视频提示词阶段必须提供segments')
     let end = 0
     for (const [index, segment] of segments.entries()) {
+      const transition = segment.transition
+      if (transition !== undefined && (!transition || !['continue', 'cut', 'scene_change'].includes(transition.type)
+        || typeof transition.reason !== 'string' || !transition.reason.trim() || index === 0 && transition.type === 'continue'))
+        throw new Error(`片段${index + 1}镜头关系无效：填写 continue/cut/scene_change 与 reason；首段不能接续上一段`)
       const path = `${wikiRoot}/剧本/视频提示词/${args.video_model}/第${args.episode_number}集${String(index + 1).padStart(3, '0')}视频提示词.md`
       if (segment.path !== path || !Number.isFinite(segment.start_seconds) || !Number.isFinite(segment.end_seconds)
         || Math.abs(segment.start_seconds - end) > 0.01 || segment.end_seconds <= end
@@ -985,13 +1014,14 @@ async function verifiedCut(ctx, exec, text, agent) {
 }
 async function adaptationCut(ctx, args, exec, agent, content) {
   const input = JSON.parse(content)
+  if (typeof input.cut_start !== 'string' || typeof input.cut_end !== 'string')
+    throw new Error('adaptation_cut 的 content 必须包含字符串字段 cut_start 和 cut_end；另需 source_path 与 chapter_heading。不能使用 source_start/source_end 代替。')
   const source = await adaptationFile(ctx, exec, input.source_path, agent, true)
   const chapters = chapterRanges(source.text).filter(item => item.heading === String(input.chapter_heading || '').replace(/^#+\s*/, ''))
   if (chapters.length !== 1) throw new Error('无法唯一定位真实章节，请提供原文件中完整章标题，不虚构章节')
   const chapter = chapters[0], body = source.text.slice(chapter.start, chapter.end)
   const minimum = Math.min(12, body.trim().length)
-  if (!minimum || typeof input.cut_start !== 'string' || typeof input.cut_end !== 'string'
-    || input.cut_start.length < minimum || input.cut_end.length < minimum) throw new Error('切分首尾须提供当前章至少12字符的唯一原文；短章使用完整正文')
+  if (!minimum || input.cut_start.length < minimum || input.cut_end.length < minimum) throw new Error('切分首尾须提供当前章至少12字符的唯一原文；短章使用完整正文')
   const a = body.indexOf(input.cut_start), b = body.indexOf(input.cut_end)
   if (a < 0 || b < a || body.indexOf(input.cut_start, a + 1) >= 0 || body.indexOf(input.cut_end, b + 1) >= 0) throw new Error('当前章切分首尾缺失、不唯一或跨章，未保存')
   const record = { source_path: source.path, source_hash: source.hash, chapter_heading: chapter.heading,
@@ -1160,12 +1190,13 @@ export function createWikiArtifactTool(ctx, contract, sourceAgent, route = 'none
         enum: kinds,
         description: '产物类型，决定唯一保存目录。',
       },
-      content: { type: 'string', description: '完成的正文；adaptation_cut/checkpoint按短剧流水线Skill传JSON；pipeline_checkpoint传JSON：stage、outputs路径数组、plan的source_path、engineering的duration_seconds、prompts的segments[{path,start_seconds,end_seconds,refs}]，Seedance的refs按@图顺序列资产ID如"角色/某人"。' },
+        content: { type: 'string', description: '完成的正文；adaptation_cut/checkpoint按短剧流水线Skill传JSON；pipeline_checkpoint传JSON：stage、outputs路径数组、plan的source_path、engineering的duration_seconds、prompts的segments[{path,start_seconds,end_seconds,refs,transition:{type,reason}}]。transition.type为continue/cut/scene_change，首段用scene_change；refs按本段图号顺序列资产ID。' },
       source_block: { type: 'integer', description: 'source_material 必填，当前用户消息文本块序号，从0开始。' },
       source_start: { type: 'string', description: '来源开始处至少12字符的唯一原文，包含在保存内容中。' },
       source_end: { type: 'string', description: '来源结束处至少12字符的唯一原文，包含在保存内容中。' },
       summary: { type: 'string', description: '一条简短、可检索的内容摘要；缺省时由工具提取正文首个有效句。' },
       research_version: { type: 'string', enum: ['original', 'adapted'], description: '项目资料版本；省略时保留旧目录，original 为原作，adapted 为改编版。' },
+      target_path: { type: 'string', description: '仅 write_mode=update：新旧目录版本并存时，先读取要更新的版本，再填写该类型对应的已有文件完整 Wiki 路径。不能指定其他文件或新建路径。' },
       episode_number: { type: 'integer', description: '剧本、分镜、视频提示词或声音导演稿对应的集数。' },
       entity_name: { type: 'string', description: '人物、角色、场景或道具名称。' },
       video_model: { type: 'string', enum: ['H3', 'Seedance'], description: '视频或分镜提示词使用的模型分支。' },
@@ -1204,7 +1235,8 @@ export function createWikiArtifactTool(ctx, contract, sourceAgent, route = 'none
         const target = await ctx.fs.resolve(value.path, { cwd: exec.agent.session.header.cwd, signal: exec.signal })
         adaptationStates.set(sourceAgent, { ...JSON.parse(await ctx.fs.readText(target, exec.signal)), path: value.path })
       }
-      return { status: value.status, path: value.path, operation: value.operation, warnings: value.warnings }
+      return { status: value.status, path: value.path, operation: value.operation, warnings: value.warnings,
+        ...(value.checkpoint && { checkpoint: value.checkpoint }) }
     },
   }
   for (const key of hidden) delete tool.parameters[key]

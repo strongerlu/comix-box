@@ -1,6 +1,6 @@
 # rh-adapter + 创作面板：AI 应用全能力补齐方案
 
-> **目标**：使韭菜盒子支持 OpenClaw_RH_Skills 同等的"运行任意 RunningHub AI 应用"能力。
+> **目标**：使COMIC-BOX支持 OpenClaw_RH_Skills 同等的"运行任意 RunningHub AI 应用"能力。
 > **基线**：rh-adapter 已有 80% 能力（节点发现、文件上传、任务提交/轮询、智能匹配、ad-hoc webappId）。
 > **分两部分**：后端 3 差距 + 前端 3 阶段。互不依赖，可独立交付。
 > **不改代码，只描述精确变更。任何 AI 工具可据此直接实施。**

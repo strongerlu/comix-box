@@ -188,9 +188,10 @@ test('full-auto mode is opt-in from the manju menu and only spends after the con
   // 审片（2026-10-26 用户要求）：拼接前逐段看，可单段重生成或改提示词，重生成期间不能确认。
   assert.match(panel, /审核第 \{\{ cutReview\.episode \}\} 集视频片段/)
   assert.match(panel, /emit\('regenerateSegment', index\)/)
-  assert.match(panel, /:disabled="anyBusy"[^>]*@click="emit\('approveCut'\)"/)
+  assert.match(panel, /:disabled="anyBusy \|\| cutReview\.videos\.some\(video => !video\) \|\| Object\.values\(reviewErrors\)\.some\(Boolean\)"[^>]*@click="emit\('approveCut'\)"/)
   assert.match(workbench, /@approve-cut="manjuAuto\.approveCut"/)
-  assert.match(controller, /await resubmitSegment\(deps\.wikiRoot, checkpoint, index, deps\.video\)/)
+  assert.match(controller, /const currentCheckpoint = newPrompt !== undefined \? await segmentCheckpoint\(\) : checkpoint/)
+  assert.match(controller, /await resubmitSegment\(deps\.wikiRoot, currentCheckpoint, index, deps\.video, \{ previousTail \}\)/)
   assert.match(workbench, /autoIntake \? `\$\{AUTO_INTAKE_PREFIX\}/, '全自动模式下用户剧本先入稿拆集')
   assert.match(workbench, /path\.endsWith\('\.json'\)[\s\S]*manjuAuto\.handleArtifactSaved\(path\)/)
   assert.match(workbench, /@start="\(config, resume\) => manjuAuto\.start\(config, resume\)"/)
@@ -203,7 +204,7 @@ test('full-auto mode is opt-in from the manju menu and only spends after the con
   // 审图可单独重新生成或改提示词重生成，重生成期间不能确认（2026-10-25 用户要求）。
   assert.match(panel, /emit\('regenerate', id\)/)
   assert.match(panel, /保存并重新生成/)
-  assert.match(panel, /:disabled="anyBusy"/)
+  assert.match(panel, /:disabled="anyBusy \|\| missingImages \|\| Object\.values\(reviewErrors\)\.some\(Boolean\)"/)
   assert.match(workbench, /@regenerate="\(id, prompt\) => manjuAuto\.regenerate\(id, prompt\)"/)
   assert.match(controller, /await regenerateAsset\(deps\.wikiRoot, id, deps\.asset, hash\)/)
   // 切换模式时没有分集剧本不弹卡，避免挡住待发送的剧本（2026-10-25 用户反馈）。
@@ -242,7 +243,7 @@ test('full-auto mode is opt-in from the manju menu and only spends after the con
   assert.match(panel, /limits: limits\.value/)
   // 回归（2026-10-25 实测）：有未完成运行时路线下拉被锁，无法改用 H3 重新开始。
   assert.doesNotMatch(panel, /v-model="route" :disabled/)
-  assert.match(controller, /episodeInstruction\(episode, wikiRoot, state\.config, rewrite\)/)
+  assert.match(controller, /episodeInstruction\(episode, wikiRoot, state\.config, rewrite, resumeFrom\)/)
   assert.match(controller, /checkpointPath\(wikiRoot, state\.config\.videoModel, episode\)/)
   // 每次运行独立停止开关 + runId 落盘守卫：旧运行（含热更新遗留）发现记录属于新运行就退出（2026-10-25 实测两个运行互相覆盖）。
   assert.doesNotMatch(controller, /stopRequested/)

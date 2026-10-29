@@ -1,7 +1,7 @@
 /**
  * utils/idb.ts — 统一存储引擎 (SQLite)
  *
- * 数据存储于 ~/.jiucaihezi/data/jiucaihezi.db (SQLite)
+ * 数据存储于 ~/.comic-box/data/jiucaihezi.db (SQLite)
  * 首次启动自动从旧 JSON 文件迁移数据
  * 内存缓存避免每次读都走 SQL
  *
@@ -1190,7 +1190,7 @@ export function joinTauriPath(...parts: string[]): string {
 export function resolveDesktopDataDirs(appDataDir: string, homeDir: string) {
   return {
     dataDir: joinTauriPath(appDataDir, 'data'),
-    legacyDataDir: joinTauriPath(homeDir, '.jiucaihezi', 'data'),
+    legacyDataDir: joinTauriPath(homeDir, '.comic-box', 'data'),
   }
 }
 

@@ -106,7 +106,8 @@ async function resourceRoots(ctx, agent, directory) {
     }
     const catalog = await ctx.skills.snapshot({ cwd: base })
     for (const skill of catalog.skills) {
-      if (skill.resourceBase?.kind === 'directory') roots.add(dirname(skill.resourceBase.path))
+      // Providers may materialize one package directly under TEMP; its parent is not a Skill root.
+      if (skill.resourceBase?.kind === 'directory') roots.add(skill.resourceBase.path)
       else if (skill.path) roots.add(dirname(skill.path))
     }
   }
@@ -117,6 +118,10 @@ async function resourceDenial(state, name, args, cwd) {
   if (state.route === 'none' || !['read', 'read_image', 'write', 'edit', 'glob', 'grep'].includes(name)) return
   const requested = resolve(cwd, args.file_path ?? args.path ?? '.')
   const path = await canonical(requested)
+  // Checkpoints contain runtime-computed hashes. Ordinary file tools must not bypass their validation.
+  if (['write', 'edit'].includes(name) && [requested, path].some(value =>
+    /\/(?:制作流水线\/(?:H3|Seedance)\/第[0-9]+集进度|改编方案\/执行进度)\.json$/i.test(value.split(sep).join('/'))))
+    return '创作进度文件只能通过 wiki_save_artifact 的 checkpoint 类型更新。'
   if (!state.roots.some(root => contains(root, path) || contains(root, requested))) return
   if (['write', 'edit'].includes(name)) return '创作模式中的 Skill 资源只读。'
   if (state.packages.some(root => contains(root, path)) || state.shared.some(root => path === root || contains(root, path))) return

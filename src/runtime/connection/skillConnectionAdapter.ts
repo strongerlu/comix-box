@@ -151,11 +151,11 @@ function buildSkillRuntimeAppendix(
 const SKILL_CREATOR_RUNTIME_APPENDIX = `
 
 ---
-## 韭菜盒子运行时差异（只列宿主差异；流程以本 Skill 正文为准）
+## COMIC-BOX运行时差异（只列宿主差异；流程以本 Skill 正文为准）
 
-当前运行环境是韭菜盒子，不是 Claude/Codex。不得调用 claude-with-access-to-the-skill 或 subagent；用户已给出某个目录或文件的绝对路径时，是否放行由系统运行时判定（本会话内持续有效）；Skill 不得假设或代为决定权限。
+当前运行环境是COMIC-BOX，不是 Claude/Codex。不得调用 claude-with-access-to-the-skill 或 subagent；用户已给出某个目录或文件的绝对路径时，是否放行由系统运行时判定（本会话内持续有效）；Skill 不得假设或代为决定权限。
 Skill 包内的 references、scripts、agents、eval-viewer 和 assets 必须使用当前 Skill 的相对路径读取；产品会将其安全映射到已加载包根目录。
-官方 Python 脚本通过韭菜盒子已接入的受限脚本执行能力运行；Web/Mobile 不伪造本地脚本执行结果。
+官方 Python 脚本通过COMIC-BOX已接入的受限脚本执行能力运行；Web/Mobile 不伪造本地脚本执行结果。
 
 **文件能力**：Skill 层不限制文件权限。用户明确要修改已安装 Skill 时，用 skill_creator_load_installed_skill 按精确 ID 读取；不得用 Terminal 兜底搜索或直接改中央 Skill 目录。
 
@@ -167,7 +167,7 @@ Skill 包内的 references、scripts、agents、eval-viewer 和 assets 必须使
 const SKILL_BUILDER_RUNTIME_APPENDIX_BASE = `
 
 ---
-## 产品运行时限制（韭菜盒子 Studio）
+## 产品运行时限制（COMIC-BOX）
 
 当前应用内不会暴露 Skill Seekers MCP 的 scrape_docs、scrape_github、scrape_pdf、enhance_skill、package_skill 等底层工具。你不能声称调用过这些外部工具。
 
@@ -189,7 +189,7 @@ const SKILL_BUILDER_RUNTIME_APPENDIX_BASE = `
 const SKILL_BUILDER_RUNTIME_APPENDIX_WITH_ADVANCED_RUNTIME = `
 
 ---
-## 产品运行时限制（韭菜盒子 Studio）
+## 产品运行时限制（COMIC-BOX）
 
 当前应用内不会暴露 Skill Seekers MCP 的 scrape_docs、scrape_github、scrape_pdf、enhance_skill、package_skill 等底层工具。你不能声称调用过这些外部工具。
 

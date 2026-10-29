@@ -3,10 +3,15 @@ import test from 'node:test'
 import { Client } from '@modelcontextprotocol/sdk/client/index.js'
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js'
 import { build } from 'esbuild'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { pathToFileURL } from 'node:url'
+import { unlinkSync } from 'node:fs'
 
-const outfile = '/tmp/jiucaihezi-creation-mcp-test.mjs'
+const outfile = join(tmpdir(), `comic-box-creation-mcp-test-${process.pid}.mjs`)
 await build({ entryPoints: ['scripts/jiucaihezi-creation-mcp/index.ts'], outfile, bundle: true, platform: 'node', format: 'esm' })
-const { createCreationMcpServer, createProxyMcpServer } = await import(`${outfile}?${Date.now()}`)
+const { createCreationMcpServer, createProxyMcpServer } = await import(pathToFileURL(outfile).href)
+test.after(() => unlinkSync(outfile))
 
 test('creation MCP exposes the fixed tool contract and forwards structured calls', async () => {
   const calls = []

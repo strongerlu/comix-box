@@ -40,10 +40,16 @@ export async function attachWikiRuntime(rec, directory = process.env.DSH_BUNDLED
     apply(ctx) {
       resetWikiReads(agent)
       ctx.on?.('fs/observed', (target, observation, exec) => recordWikiRead(agent, target, observation, exec))
-      let pipelineRequested = false, checkpointSeen = false, failed = false, nudges = 0, progress = ''
+      let pipelineRequested = false, checkpointSeen = false, failed = false, nudges = 0, progress = '', intakeOnly = false
+      ctx.tools.guard(exec => intakeOnly && exec.agent === agent && exec.name === 'wiki_save_artifact'
+        && exec.arguments?.artifact_kind === 'pipeline_checkpoint' ? '当前仅为入稿：保存剧本与已确认风格后结束，等待启动卡确认，不能推进制作检查点。' : undefined)
       ctx.on?.('session/event', (session, event) => {
         if (session !== agent.session) return
-        if (event.type === 'user/message' && event.data.source.kind === 'user') { resetWikiReads(agent); pipelineRequested = false; checkpointSeen = false; failed = false; nudges = 0 }
+        if (event.type === 'user/message' && event.data.source.kind === 'user') {
+          resetWikiReads(agent); pipelineRequested = false; checkpointSeen = false; failed = false; nudges = 0
+          const text = event.data.content.filter(block => block.type === 'text').map(block => block.text).join('\n')
+          intakeOnly = text.split('【本轮消息】').at(-1).trimStart().startsWith('【全自动成片·入稿】')
+        }
         if (event.type === 'tool/call') {
           let args
           try { args = JSON.parse(event.data.arguments) } catch { return }
@@ -55,7 +61,7 @@ export async function attachWikiRuntime(rec, directory = process.env.DSH_BUNDLED
       })
       ctx.on?.('agent/turn-stopping', ({ signal }) => {
         const route = scopes.get(agent)?.route
-        if (signal.aborted || !pipelineRequested || failed || !['manju', 'short-drama'].includes(route)) return
+        if (signal.aborted || intakeOnly || !pipelineRequested || failed || !['manju', 'short-drama'].includes(route)) return
         const shortDrama = route === 'short-drama'
         const state = checkpointSeen ? (shortDrama ? adaptationStateFor(agent) : pipelineStateFor(agent)) : undefined
         const skill = shortDrama ? 'jc-duanju-pipeline' : 'jc-manju-pipeline'

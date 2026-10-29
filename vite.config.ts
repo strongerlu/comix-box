@@ -29,12 +29,6 @@ export default defineConfig({
   },
   // prevent vite from obscuring rust errors
   clearScreen: false,
-  // Monterey 兼容：排除含 lookbehind 检测的依赖，避免 esbuild 误优化
-  optimizeDeps: {
-    exclude: [
-      '@tiptap/markdown',
-    ],
-  },
   server: {
     // Tauri expects a fixed port
     port: 1420,
@@ -55,24 +49,17 @@ export default defineConfig({
   },
   // produce Tauri-compatible output
   build: {
-    // Tauri uses Chromium on Windows and WebKit on macOS/Linux
-    target: process.env.TAURI_ENV_PLATFORM === 'windows' ? 'chrome105' : 'safari15',
+    // Windows WebView2 使用 Chromium。
+    target: 'chrome105',
     // don't minify for debug builds
     minify: !process.env.TAURI_ENV_DEBUG ? 'esbuild' : false,
     // produce sourcemaps for debug builds
     sourcemap: !!process.env.TAURI_ENV_DEBUG,
     rolldownOptions: {
-      // 三个入口候选：/ 是落地页（拉下载），/try/ 是工作台本体，/mobile/ 是 iOS 遥控器。
-      // 桌面构建随后由 prune-desktop-dist.mjs 把 try/index.html 提回根；
-      // iOS 构建（JC_BUILD_TARGET=mobile）只编 /mobile/，产物直接落在 dist/index.html，
-      // 因此 rollup 图里根本不会出现工作台和 Harness 客户端的 chunk。
-      input: process.env.JC_BUILD_TARGET === 'mobile'
-        ? { index: resolve(__dirname, 'mobile/index.html') }
-        : {
-            index: resolve(__dirname, 'index.html'),
-            try: resolve(__dirname, 'try/index.html'),
-            screenshot: resolve(__dirname, 'screenshot/index.html'),
-          },
+      input: {
+        index: resolve(__dirname, 'index.html'),
+        screenshot: resolve(__dirname, 'screenshot/index.html'),
+      },
       output: {
         entryFileNames: `assets/[name]-[hash]-${assetVersion}.js`,
         chunkFileNames: `assets/[name]-[hash]-${assetVersion}.js`,
@@ -83,11 +70,6 @@ export default defineConfig({
               name: 'vendor-vue',
               test: /node_modules[\\/](vue|@vue|pinia)[\\/]/,
               priority: 30,
-            },
-            {
-              name: 'vendor-editor',
-              test: /node_modules[\\/]@tiptap[\\/]/,
-              priority: 25,
             },
             {
               name: 'vendor-markdown',

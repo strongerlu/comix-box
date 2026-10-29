@@ -25,33 +25,8 @@ test('privacy and terms route questions to the same support page', () => {
   }
 })
 
-// 根路径只放落地页：Web 从 2026-09-25 起不再发布工作台，/try/ 只服务桌面与 iOS 打包
-// （prune-desktop-dist.mjs 把 try/index.html 提回根，Tauri 的 frontendDist 就是
-// dist/index.html）。搞反了不会报错，只会让所有人一进站就撞上工作台。
-test('web landing page never links the workbench entry', () => {
-  const landing = source('index.html')
-  const workbench = source('try/index.html')
-
-  assert.doesNotMatch(landing, /\/src\/main\.ts/, '落地页不能挂 app 脚本')
-  assert.doesNotMatch(landing, /\/try\//, 'Web 不再发布工作台，落地页不能链接 /try/')
-  assert.match(workbench, /\/src\/main\.ts/, '/try/ 必须挂 app 脚本，桌面打包靠它')
-
-  // App Review 会顺着官网找隐私与支持入口，三个法务页都得能从落地页走到。
-  for (const legal of ['/support/', '/privacy/', '/terms/']) {
-    assert.match(landing, new RegExp(`href="${legal}"`), `落地页缺少 ${legal} 链接`)
-  }
-})
-
-// 上面那条只证明「落地页不链接」，这条证明「产物真被删掉且再进不来」。
-test('web dist drops the workbench and rejects it if it comes back', () => {
-  assert.match(source('scripts/prune-web-dist.mjs'), /rmSync\(webAppDir/)
-  assert.doesNotMatch(source('scripts/audit-web-dist.mjs'), /^\s*'try',$/m)
-})
-
-test('landing page ships a share card WeChat can render', () => {
-  const image = source('index.html').match(/<meta property="og:image" content="([^"]+)"/)?.[1]
-
-  assert.ok(image, 'og:image 缺失，微信分享出去是一张空卡片')
-  // 微信卡片不渲染 WebP 和 SVG
-  assert.match(image, /\.(jpe?g|png)$/i)
+test('Gateway homepage source stays separate from the desktop entry', () => {
+  assert.match(source('index.html'), /\/src\/main\.ts/)
+  assert.doesNotMatch(source('gateway/site/index.html'), /\/src\/main\.ts/)
+  assert.match(source('gateway/scripts/sync-homepage.mjs'), /gatewayRoot, 'site', 'index.html'/)
 })

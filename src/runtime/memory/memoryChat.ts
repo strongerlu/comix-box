@@ -468,9 +468,9 @@ export async function runMemoryChat(input: MemoryChatInput): Promise<string> {
     systemPrompt:
       [
         !toolLoopRequired
-          ? '你是韭菜盒子记忆工作台。已提供最近轮次对话历史保持连续；回答当前用户消息。本轮未选择 Skill 或工具，不要使用任何工具能力。'
+          ? '你是COMIC-BOX记忆工作台。已提供最近轮次对话历史保持连续；回答当前用户消息。本轮未选择 Skill 或工具，不要使用任何工具能力。'
           : [
-              '你是韭菜盒子记忆工作台。本轮用户消息是当前唯一任务；用户明确指定的项目文件是长期事实源。',
+              '你是COMIC-BOX记忆工作台。本轮用户消息是当前唯一任务；用户明确指定的项目文件是长期事实源。',
               '不得查找 Raw 对话记录补充当前任务；缺少事实时查询指定文件或询问用户。',
               '项目知识与创作资料都是普通文件。按需使用 read、glob、grep 查询，使用 write、edit、mkdir、move、copy、delete 修改；不启用特殊 Agent 或第二阶段协议。',
               '用户在消息里给出的绝对路径就是本次的工作范围；这个范围内的文件工具、终端与 Skill 脚本都可以直接用，不需要再请求许可或让用户二次确认。',

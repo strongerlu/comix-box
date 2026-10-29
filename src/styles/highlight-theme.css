@@ -35,7 +35,8 @@
 
 /* ── 暗色主题 ── */
 [data-theme="dark"],
-[data-theme="dracula"] {
+[data-theme="dracula"],
+[data-theme="aurora"] {
   --hl-bg: #161b22;
   --hl-color: #e6edf3;
   --hl-comment: #8b949e;

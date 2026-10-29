@@ -36,8 +36,6 @@ pub struct Status {
     error: String,
 }
 struct Active {
-    // 与截图编辑会话同寿命；截图窗不具备安装权限，但安装必须等待它结束。
-    update_task: Option<super::desktop_update::NativeTask>,
     id: String,
     label: String,
     source: Option<String>,
@@ -231,7 +229,7 @@ pub fn screenshot_permission(
     if !granted {
         report(
             &app,
-            "请在系统设置 → 隐私与安全性 → 屏幕录制中授权韭菜盒子；必要时重启应用".into(),
+            "请在系统设置 → 隐私与安全性 → 屏幕录制中授权COMIC-BOX；必要时重启应用".into(),
         );
     }
     Ok(granted)
@@ -245,7 +243,6 @@ pub async fn screenshot_begin(
     begin(app, Some(window)).await
 }
 async fn begin(app: tauri::AppHandle, source: Option<tauri::WebviewWindow>) -> Result<(), String> {
-    let update_task = super::desktop_update::native_task(&app, "截图")?;
     {
         let state = lock(&app);
         if let Some(active) = &state.active {
@@ -264,7 +261,6 @@ async fn begin(app: tauri::AppHandle, source: Option<tauri::WebviewWindow>) -> R
             return Ok(());
         }
         state.active = Some(Active {
-            update_task,
             id: id.clone(),
             label: label.clone(),
             source: source.as_ref().map(|w| w.label().to_string()),

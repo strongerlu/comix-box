@@ -107,7 +107,7 @@ test('builds a safe media process input from cached upload metadata', () => {
     name: 'lesson.mp4',
     type: 'video/mp4',
     size: 12_345_678,
-    cachedPath: '/Users/by3/Library/Application Support/韭菜盒子/media-cache/lesson.mp4',
+    cachedPath: '/Users/by3/Library/Application Support/COMIC-BOX/media-cache/lesson.mp4',
   })
 
   const input = buildMediaProcessInput(

@@ -6,7 +6,7 @@ test('screenshot window has an isolated entry and only screenshot permissions', 
   const capability = JSON.parse(read('src-tauri/capabilities/screenshot.json'))
   const workbench = JSON.parse(read('src-tauri/capabilities/default.json'))
   assert.deepEqual(capability.windows, ['shot-*'])
-  assert.deepEqual(capability.platforms, ['macOS', 'windows'])
+  assert.deepEqual(capability.platforms, ['windows'])
   assert(!workbench.windows.includes('shot-*'))
   for (const permission of capability.permissions) {
     assert(!/shell|sql|allow-app-commands|fs:default|core:default/.test(typeof permission === 'string' ? permission : permission.identifier))
@@ -20,11 +20,11 @@ test('screenshot window has an isolated entry and only screenshot permissions', 
   assert(!allowed.includes('screenshot_set_settings'))
   assert(!allowed.includes('screenshot_begin'))
 })
-test('screenshot dependencies keep the existing platform patches active', () => {
+test('screenshot keeps Windows capture and shortcut dependencies without the iOS runtime fork', () => {
   const cargo = read('src-tauri/Cargo.toml')
   assert.match(cargo, /tauri-plugin-global-shortcut = "=2\.3\.1"/)
-  assert.match(cargo, /\[target\.'cfg\(target_os = "windows"\)'\.dependencies\]\s*xcap/)
-  assert.match(cargo, /tauri-runtime-wry = \{ path = "vendor\/tauri-runtime-wry" \}/)
+  assert.match(cargo, /xcap = "=0\.6\.2"/)
+  assert.doesNotMatch(cargo, /vendor\/tauri-runtime-wry|\[patch.crates-io\]/)
 })
 test('screenshot entry resolves outside /try/ in development and inside bundled assets', () => {
   const source = read('src-tauri/src/commands/screenshot.rs')

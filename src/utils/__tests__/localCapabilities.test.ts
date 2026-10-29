@@ -36,3 +36,12 @@ test('local capabilities do not expose media capture component detection', () =>
   assert.doesNotMatch(source, /jc_ytdlp/)
   assert.doesNotMatch(source, /ytdlp_detect/)
 })
+
+test('FFmpeg remains unavailable until a real Windows desktop probe succeeds', async () => {
+  installStorage()
+  const capability = getLocalCapabilities().find(item => item.id === 'ffmpeg')!
+
+  assert.equal(await capability.check(), false)
+  await assert.rejects(capability.setup(), /Windows 桌面版/)
+  assert.equal(await capability.check(), false)
+})

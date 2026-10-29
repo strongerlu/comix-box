@@ -58,19 +58,19 @@ py -3   --version    # Windows 启动器兜底
 ### 2. 确认脚本已落地
 
 ```bash
-<解释器> <用户目录>/.jiucaihezi/tools/jc-watch/jc_watch.py --help
+<解释器> <用户目录>/.comic-box/tools/jc-watch/jc_watch.py --help
 ```
 
 `<用户目录>` 取 `$HOME`（macOS / Linux）或 `$env:USERPROFILE`（Windows）。
 
 ### 3. 未落地就部署一次
 
-把技能自带的 `scripts/*.py`（共 6 个）复制到 `~/.jiucaihezi/tools/jc-watch/`，**平铺放，不要再套一层 `scripts/`**。
+把技能自带的 `scripts/*.py`（共 6 个）复制到 `~/.comic-box/tools/jc-watch/`，**平铺放，不要再套一层 `scripts/`**。
 
 macOS / Linux：
 
 ```bash
-mkdir -p ~/.jiucaihezi/tools/jc-watch && cp "<技能目录>/scripts/"*.py ~/.jiucaihezi/tools/jc-watch/
+mkdir -p ~/.comic-box/tools/jc-watch && cp "<技能目录>/scripts/"*.py ~/.comic-box/tools/jc-watch/
 ```
 
 Windows（PowerShell）：
@@ -82,12 +82,12 @@ Copy-Item "<技能目录>\scripts\*.py" "$env:USERPROFILE\.jiucaihezi\tools\jc-w
 
 **不要用 `ln -s` / `mklink` 建符号链接**：Windows 创建符号链接需要管理员权限或开发者模式，普通用户机器上大概率失败，而且失败方式很难诊断。复制是唯一跨平台可靠的部署方式，这几个文件只有几十 KB。
 
-落地后的路径就是 `~/.jiucaihezi/tools/jc-watch/jc_watch.py`，**没有 `scripts/` 这一层**；而仓库里的布局是 `skills/jc-watch/scripts/`。两者不一样，排错时别混用。
+落地后的路径就是 `~/.comic-box/tools/jc-watch/jc_watch.py`，**没有 `scripts/` 这一层**；而仓库里的布局是 `skills/jc-watch/scripts/`。两者不一样，排错时别混用。
 
 ### 4. 跑
 
 ```bash
-<解释器> ~/.jiucaihezi/tools/jc-watch/jc_watch.py "<视频链接或本地路径>" [参数]
+<解释器> ~/.comic-box/tools/jc-watch/jc_watch.py "<视频链接或本地路径>" [参数]
 ```
 
 ## 流程
@@ -145,15 +145,15 @@ Copy-Item "<技能目录>\scripts\*.py" "$env:USERPROFILE\.jiucaihezi\tools\jc-w
 1. `--whisper-model <路径>`
 2. 环境变量 `$JC_WATCH_WHISPER_MODEL`
 3. 环境变量 `$WHISPER_MODEL`
-4. **`~/.jiucaihezi/tools/whisper-models/`** ← 推荐用户放这里
+4. **`~/.comic-box/tools/whisper-models/`** ← 推荐用户放这里
 5. `~/.cache/whisper.cpp/`
-6. `~/.jiucaihezi/models/whisper/`
+6. `~/.comic-box/models/whisper/`
 7. macOS brew：`/opt/homebrew/share/whisper.cpp/`、`/usr/local/share/whisper.cpp/`
 
 模型必须是 ggml 格式，**多语言版优先**（`.en` 版识别不了中文）。`ggml-base.bin` 约 148 MB，够起步：
 
 ```bash
-mkdir -p ~/.jiucaihezi/tools/whisper-models && curl -L -o ~/.jiucaihezi/tools/whisper-models/ggml-base.bin \
+mkdir -p ~/.comic-box/tools/whisper-models && curl -L -o ~/.comic-box/tools/whisper-models/ggml-base.bin \
   https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.bin
 ```
 

@@ -15,7 +15,7 @@ function createKv() {
 
 function createSiteAssets() {
   const files = new Map([
-    ['/index.html', ['<!doctype html><title>韭菜盒子 Studio</title>', 'text/html; charset=utf-8']],
+    ['/index.html', ['<!doctype html><title>COMIC-BOX</title>', 'text/html; charset=utf-8']],
     ['/landing/logo.svg', ['<svg></svg>', 'image/svg+xml']],
     ['/landing/IMG_5114.webp', ['hero image', 'image/webp']],
     ['/favicon.svg', ['<svg></svg>', 'image/svg+xml']],
@@ -77,7 +77,7 @@ test('desktop auth start serves a bridge page that polls for a safe app callback
   assert.equal(response.status, 200);
   assert.match(response.headers.get('Content-Type'), /text\/html/);
   const html = await response.text();
-  assert.match(html, /韭菜盒子桌面登录/);
+  assert.match(html, /COMIC-BOX桌面登录/);
   assert.match(html, /https:\/\/gateway\.test\/sign-in/);
   assert.match(html, /https:\/\/gateway\.test\/auth\/desktop\/token\?state=abc123456789012345678901234/);
   assert.match(html, /redirect=jiucaihezi%3A%2F%2Fauth%2Fcallback/);
@@ -427,4 +427,15 @@ test('unrelated old gateway routes are removed', async () => {
 test('creation media routes belong to NewAPI, not the Worker', () => {
   const config = readFileSync(new URL('../wrangler.toml', import.meta.url), 'utf8');
   assert.doesNotMatch(config, /api\/creations\/uploads|media\/creation|r2_buckets/);
+});
+
+
+test('COMIC-BOX login and MCP callbacks use the independent scheme while original clients keep theirs', async () => {
+  const start = await gateway.fetch(request('/auth/desktop/start?state=abc123456789012345678901234&redirect=comic-box%3A%2F%2Fauth%2Fcallback'), createEnv());
+  assert.equal(start.status, 200);
+  const response = await gateway.fetch(request('/auth/mcp/github/callback?code=comic-code&state=comic-box_123456789012345678901234'), createEnv());
+  assert.equal(response.status, 302);
+  assert.equal(new URL(response.headers.get('location')).protocol, 'comic-box:');
+  const original = await gateway.fetch(request('/auth/mcp/github/callback?code=original-code&state=original-123456789012345678901234'), createEnv());
+  assert.equal(new URL(original.headers.get('location')).protocol, 'jiucaihezi:');
 });

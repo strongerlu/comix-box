@@ -8,7 +8,8 @@
 import { isLocalLikeProviderId } from '@/utils/providerConfig'
 
 export const DEFAULT_CLOUD_CONTEXT_WINDOW = 1_000_000
-export const DEFAULT_CLOUD_MAX_OUTPUT_TOKENS = 128_000
+// 未知容量不是 128K 输出能力；采用与随包适配器一致的保守请求值，服务端明确元数据仍优先。
+export const DEFAULT_CLOUD_MAX_OUTPUT_TOKENS = 32_768
 export const DEFAULT_LOCAL_CONTEXT_WINDOW = 262_144
 // 与随包 DSH llm-pi-ai 0.2.1-rc.3 的未知模型默认输出一致。
 export const DEFAULT_LOCAL_MAX_OUTPUT_TOKENS = 32_768

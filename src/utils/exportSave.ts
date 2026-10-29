@@ -13,7 +13,7 @@ export interface SaveGeneratedFileResult {
 }
 
 export function normalizeExportFilename(filename: string, fallbackExt: string): string {
-  const fallback = `韭菜盒子导出.${fallbackExt.replace(/^\./, '') || 'md'}`
+  const fallback = `COMIC-BOX导出.${fallbackExt.replace(/^\./, '') || 'md'}`
   const clean = String(filename || fallback)
     .replace(/[/\\:*?"<>|]/g, '_')
     .replace(/\s+/g, ' ')

@@ -96,7 +96,7 @@ pub fn resolve_creation_mcp(app: AppHandle) -> Result<CreationMcpLaunchConfig, S
         let repo_root = root.join("..");
         let path = repo_root.join("scripts/jiucaihezi-creation-mcp/dist/index.mjs");
         if !path.exists() {
-            return Err("韭菜盒子创作 MCP 尚未构建，请先运行 build:creation-mcp".to_string());
+            return Err("COMIC-BOX创作 MCP 尚未构建，请先运行 build:creation-mcp".to_string());
         }
         (path, Some(repo_root.to_string_lossy().into_owned()))
     };
@@ -175,7 +175,7 @@ fn remove_owned_discovery(path: &PathBuf, token: &str) {
 
 fn discovery_path() -> Result<PathBuf, String> {
     dirs_next::home_dir()
-        .map(|home| home.join(".jiucaihezi").join("mcp-bridge.json"))
+        .map(|home| home.join(".comic-box").join("mcp-bridge.json"))
         .ok_or_else(|| "home directory unavailable".to_string())
 }
 
@@ -197,12 +197,7 @@ fn write_discovery(path: &PathBuf, value: &DiscoveryFile) -> Result<(), String> 
         serde_json::to_vec(value).map_err(|error| error.to_string())?,
     )
     .map_err(|error| error.to_string())?;
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        fs::set_permissions(&temporary, fs::Permissions::from_mode(0o600))
-            .map_err(|error| error.to_string())?;
-    }
+
     fs::rename(temporary, path).map_err(|error| error.to_string())
 }
 
@@ -285,7 +280,7 @@ fn process_request(
             }
             Err((
                 "504 Gateway Timeout",
-                "韭菜盒子前端未就绪或响应超时".to_string(),
+                "COMIC-BOX前端未就绪或响应超时".to_string(),
             ))
         }
     }

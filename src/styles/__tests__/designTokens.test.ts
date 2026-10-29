@@ -28,18 +28,18 @@ function contrast(a: string, b: string): number {
   return (lighter + .05) / (darker! + .05)
 }
 
-test('default workbench tokens use a quiet branded light surface', () => {
+test('default workbench tokens use the warm daytime palette', () => {
   const block = blockFor('light')
-  assert.equal(value(block, '--jc-surface'), '#FAFAFA')
+  assert.equal(value(block, '--jc-surface'), '#F4F2ED')
   assert.equal(value(block, '--jc-surface-container-lowest'), '#FFFFFF')
-  assert.equal(value(block, '--jc-primary'), '#4A5D23')
+  assert.equal(value(block, '--jc-primary'), '#A65012')
   assert.match(block, /--jc-text-primary:\s*var\(--jc-on-surface\)/)
   assert.match(block, /--ink1:\s*var\(--jc-text-primary\)/)
   assert.match(block, /--paper:\s*var\(--jc-surface-container-lowest\)/)
 })
 
-test('every retained theme keeps readable primary text and accent links', () => {
-  for (const theme of ['light', 'white', 'dark', 'green', 'nord', 'dracula']) {
+test('the three retained themes keep readable primary text and accent links', () => {
+  for (const theme of ['light', 'dark', 'aurora']) {
     const block = blockFor(theme)
     const surface = value(block, '--jc-surface')
     const text = value(block, '--jc-on-surface')

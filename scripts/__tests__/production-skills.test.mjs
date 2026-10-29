@@ -3,7 +3,7 @@ import { test } from 'node:test'
 import { createServer } from 'node:http'
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, cpSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { join, dirname } from 'node:path'
 import { DeepSeekHarness } from '../../src-tauri/resources/deepseek-harness/node_modules/@deepseek-ai/dsh-sdk-client/lib/index.js'
 
 async function fixture(t) {
@@ -58,6 +58,37 @@ async function fixture(t) {
 }
 
 const catalog = request => request.messages.filter(m => typeof m.content === 'string' && m.content.includes('<available_skills>')).at(-1)?.content || ''
+
+test('first request keeps the actual user task after the skill catalog instead of asking the model to acknowledge guidance', { timeout: 30000 }, async t => {
+  const f = await fixture(t)
+  const task = 'FIRST_REAL_TASK: read the current project and complete the requested artifact'
+  await f.run('fresh-task', 'manju', task)
+  const request = f.requests[0]
+  const users = request.messages.filter(message => message.role === 'user')
+  const lastUser = typeof users.at(-1)?.content === 'string' ? users.at(-1).content : JSON.stringify(users.at(-1)?.content)
+  assert.match(lastUser, /FIRST_REAL_TASK:/)
+  assert.match(catalog(request), /jc-seedance/)
+  assert.ok(request.tools.some(tool => tool.function.name === 'skill'))
+})
+
+test('catalog replacement, cold recovery and explicit Skill loading preserve the current task as the final user input', { timeout: 60000 }, async t => {
+  const f = await fixture(t)
+  for (const [mode, marker] of [['none', 'ORDINARY_TASK'], ['manju', 'MANJU_TASK'], ['novel', 'NOVEL_TASK']]) {
+    const index = f.requests.length
+    await f.run('scope-order', mode, `${marker}: complete this task`)
+    const last = f.requests[index].messages.filter(message => message.role === 'user').at(-1)
+    assert.match(JSON.stringify(last.content), new RegExp(marker))
+  }
+  await f.restart()
+  await f.run('scope-order', 'short-drama', 'RECOVERED_TASK: continue from saved project files')
+  assert.match(JSON.stringify(f.requests.at(-1).messages.filter(message => message.role === 'user').at(-1).content), /RECOVERED_TASK/)
+  await f.run('explicit-task', 'manju', '/jc-seedance EXPLICIT_TASK: write the requested scene')
+  const users = f.requests.at(-1).messages.filter(message => message.role === 'user')
+  assert.match(JSON.stringify(users.at(-1).content), /EXPLICIT_TASK/)
+  assert.match(JSON.stringify(users.slice(0, -1)), /BODY_jc-seedance/)
+  const { events } = await f.harness.client.request('session/read', { sessionId: 'explicit-task' })
+  assert.equal(events.filter(event => event.type === 'user/message' && event.data.source.kind === 'skill-invocation').length, 1)
+})
 
 test('production buttons expose only the whitelist through the official catalog and loader, without invoking a router', { timeout: 30000 }, async t => {
   const f = await fixture(t)
@@ -241,4 +272,41 @@ test('individual Skill selection is a singleton whitelist with official lazy loa
   assert.match(JSON.stringify(f.requests.at(-1).messages.filter(m => m.role === 'tool')), /OUTSIDE_BODY/)
   await f.run('single', 'none')
   assert.match(catalog(f.requests.at(-1)), /outside/)
+})
+
+test('creative tools cannot overwrite computed pipeline checkpoints, while manuscript edits remain allowed', { timeout: 30000 }, async t => {
+  const f = await fixture(t)
+  const workspace = mkdtempSync(join(tmpdir(), 'jc-checkpoint-guard-'))
+  t.after(() => rmSync(workspace, { recursive: true, force: true }))
+  f.options.cwd = workspace
+  f.options.processCwd = workspace
+  await f.restart()
+  await f.harness.start()
+  for (const [index, scenario] of [
+    { path: 'wiki/制作流水线/H3/第1集进度.json', tool: 'write', protected: true },
+    { path: 'wiki/改编方案/执行进度.json', tool: 'edit', protected: true },
+    { path: 'wiki/剧本/第一集.md', tool: 'write', protected: false },
+  ].entries()) {
+    const target = join(workspace, scenario.path)
+    mkdirSync(dirname(target), { recursive: true })
+    writeFileSync(target, 'original')
+    const sessionId = 'computed-progress-' + index
+    await f.harness.client.request('session/permission', { sessionId, preset: 'workspace-write' })
+    let step = 0
+    f.onRequest = async (_request, res) => {
+      if (++step > 2) return false
+      const name = step === 1 ? 'read' : scenario.tool
+      const args = step === 1 ? { file_path: target }
+        : scenario.tool === 'write' ? { file_path: target, content: 'changed' }
+          : { file_path: target, old_string: 'original', new_string: 'changed' }
+      const delta = { role: 'assistant', tool_calls: [{ index: 0, id: 'guard-' + step, type: 'function', function: { name, arguments: JSON.stringify(args) } }] }
+      res.end(`data: ${JSON.stringify({ id: 'guard', object: 'chat.completion.chunk', model: 'test', choices: [{ index: 0, delta, finish_reason: 'tool_calls' }] })}\n\ndata: [DONE]\n\n`)
+      return true
+    }
+    const start = f.requests.length
+    await f.run(sessionId, 'manju', 'update this project file')
+    assert.equal(readFileSync(target, 'utf8'), scenario.protected ? 'original' : 'changed')
+    const results = JSON.stringify(f.requests.slice(start).flatMap(r => r.messages.filter(m => m.role === 'tool')))
+    if (scenario.protected) assert.match(results, /进度文件.*wiki_save_artifact/)
+  }
 })

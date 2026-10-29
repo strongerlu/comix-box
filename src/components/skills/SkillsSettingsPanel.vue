@@ -222,7 +222,7 @@ onMounted(() => {
       <section class="panel wide">
         <header>
           <div>
-            <h4>韭菜盒子内置 Skill</h4>
+            <h4>COMIC-BOX内置 Skill</h4>
             <p>来自应用内置的 public/skills，只读展示，可在对话中用 @ 选择。</p>
           </div>
           <span class="pill">{{ bundledSkills.length }} 个</span>

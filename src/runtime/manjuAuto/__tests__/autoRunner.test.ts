@@ -1,6 +1,13 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { adviceSummary, referenceAdvice } from '../autoRunner'
+import { adviceSummary, completedEpisodeLabel, referenceAdvice } from '../autoRunner'
+
+test('completion labels distinguish text, unreviewed output, legacy and version-bound approval', () => {
+  assert.equal(completedEpisodeLabel({ phase: 'done' }, { target: 'prompts' }), '提示词就绪')
+  assert.equal(completedEpisodeLabel({ phase: 'done' }, { reviewVideos: false }), '已拼接·未审片')
+  assert.equal(completedEpisodeLabel({ phase: 'done', videosReviewed: true }, {}), '已拼接·审片状态未记录')
+  assert.equal(completedEpisodeLabel({ phase: 'done', videosReviewed: true, videoReviewKey: 'current' }, {}), '已拼接·已人工确认')
+})
 import { createAutoRun, deriveCheckpoint, episodeInstruction, episodeTextStatus, estimateUnitCost, handleCheckpointSaved, modelLimits, priceForResolution, resumeAutoRun, revisionInstruction, runAuto, type AutoRunConfig, type AutoRunnerDeps, type RunnerCheckpoint } from '../autoRunner'
 
 type Task = { status: string; localPath?: string; error?: string }
@@ -57,7 +64,8 @@ function world(options: { episodes?: number[]; imageOk?: boolean; videoOk?: bool
       checkpoints.set(episode, { episode_number: episode, video_model: 'Seedance', stage: 'complete', status: 'completed', assets,
         segments: refs.map((list, i) => {
           const path = seg.replace('001', String(i + 1).padStart(3, '0'))
-          if (i) fs.set(path, `第${episode}集第${i + 1}段，纯文生。`)
+          if (options.refs) fs.set(path, `第${episode}集第${i + 1}段。\n${list.map((id, index) => `@图${index + 1}：${id.split('/')[1]}`).join('\n')}`)
+          else if (i) fs.set(path, `第${episode}集第${i + 1}段，纯文生。`)
           return { path, start_seconds: i * 12.5, end_seconds: (i + 1) * 12.5, refs: list }
         }) })
     },
@@ -163,6 +171,14 @@ test('per-episode budget blocks before spending when the estimate exceeds the ca
   assert.equal(w.videos.length, 0, '加上视频 13 秒×0.2 超过预算 1，不提交视频')
 })
 
+test('continuation budget uses the selected downstream model before submitting either segment', async () => {
+  const w = world({ episodes: [1], refs: [[], []], config: { continuationModelId: 'first-frame', continuationPrice: '1/秒', videoPrice: '0.01/秒', budgetPerEpisode: 5 } })
+  const result = await runAuto(w.run, w.deps)
+  assert.equal(result.status, 'blocked')
+  assert.match(result.episodes['1'].reason!, /预算/)
+  assert.equal(w.videos.length, 0, '续接价格使整集超限，首段也不能先提交')
+})
+
 test('unit cost parsing covers per-item, per-second and unknown prices', () => {
   assert.equal(estimateUnitCost(0.04), 0.04)
   assert.equal(estimateUnitCost('1.2/条'), 1.2)
@@ -172,6 +188,18 @@ test('unit cost parsing covers per-item, per-second and unknown prices', () => {
   assert.equal(estimateUnitCost('0.2元/秒', 10), 2)
   assert.equal(estimateUnitCost(undefined), undefined)
   assert.equal(estimateUnitCost('按量计费'), undefined)
+})
+
+test('planned cuts use the ordinary model budget even when an expensive continuation model is selected', async () => {
+  const w = world({ episodes: [1], refs: [[], []], config: { continuationModelId: 'frame', continuationPrice: '100/秒', videoPrice: '0.01/秒', budgetPerEpisode: 5 } })
+  const read = w.deps.readCheckpoint
+  w.deps.readCheckpoint = async episode => {
+    const cp = await read(episode)
+    if (cp?.segments[1]) cp.segments[1].transition = { type: 'cut', reason: '换观察侧' }
+    return cp
+  }
+  assert.equal((await runAuto(w.run, w.deps)).status, 'done')
+  assert.equal(w.videos.length, 2)
 })
 
 test('resuming after an asset failure retries failed assets and can use a new image model config', async () => {
@@ -397,6 +425,28 @@ test('reviewVideos false concatenates without pausing', async () => {
   assert.equal(w.concats.length, 1)
 })
 
+test('an approval is reused only for the same rendered video versions', async () => {
+  const w = world({ episodes: [1] })
+  await runAuto(w.run, w.deps)
+  assert.equal(w.cutReviews.length, 1)
+  w.run.episodes['1'].phase = 'videos'
+  await runAuto(w.run, w.deps)
+  assert.equal(w.cutReviews.length, 1, 'unchanged render keeps its approval')
+  const path = 'wiki/制作流水线/Seedance/第1集视频任务.json'
+  const registry = JSON.parse(w.fs.get(path)!)
+  Object.assign(registry.segments[0], { fingerprint: 'changed-prompt', task_id: 'replacement', video_path: '/out/replacement.mp4' })
+  w.fs.set(path, JSON.stringify(registry))
+  w.run.episodes['1'].phase = 'videos'
+  await runAuto(w.run, w.deps)
+  assert.equal(w.cutReviews.length, 2, 'changed render must be reviewed again before concatenation')
+  assert.deepEqual(w.concats.at(-1)?.videos, ['/out/replacement.mp4'])
+})
+
+test('a blocked text checkpoint is not treated as completed merely because its stage says complete', () => {
+  const blocked = { stage: 'complete', status: 'blocked', reason: 'missing dependency', segments: [{ path: 'scene.md', start_seconds: 0, end_seconds: 9, refs: [] }] }
+  assert.notEqual(episodeTextStatus(blocked, { max_seconds: 30 }).state, 'complete')
+})
+
 test('pure text-to-video: no assets registered, no images generated, every segment submitted without reference images', async () => {
   const w = world({ episodes: [1], refs: [[], []], config: { limits: { max_seconds: 30, max_refs: 0 } } })
   const state = await runAuto(w.run, w.deps)
@@ -451,4 +501,21 @@ test('advice summary tells the user what will be drawn and roughly what it costs
   assert.equal(adviceSummary(advice, '按量计费'), '旁白宣传片 · 按段决定：1 张参考图（木塔）；文字带过：工匠、墨斗')
   assert.equal(adviceSummary(referenceAdvice('制作路线：旁白宣传片\n参考图方式：纯文生（广告）'), 0.2), '旁白宣传片 · 纯文生：不生图')
   assert.equal(adviceSummary(referenceAdvice('画面比例：9:16'), 0.2), undefined)
+})
+
+
+test('a changed source blocks the automatic run before any image or video is submitted', async () => {
+  const w = world({ episodes: [1] })
+  w.fs.set('source.md', 'changed source')
+  w.fs.set('wiki/资产/角色/甲/角色生图格式提示词.md', '甲')
+  w.fs.set('video.md', '甲。\n@图1：甲')
+  w.checkpoints.set(1, { episode_number: 1, video_model: 'Seedance', stage: 'complete', status: 'completed',
+    source_path: 'source.md', source_hash: '0'.repeat(64),
+    assets: { '角色/甲': { kind: 'character', prompt_path: 'wiki/资产/角色/甲/角色生图格式提示词.md', prompt_hash: 'a'.repeat(64) } },
+    segments: [{ path: 'video.md', start_seconds: 0, end_seconds: 15, refs: ['角色/甲'] }] })
+  const result = await runAuto(w.run, w.deps)
+  assert.equal(result.status, 'blocked')
+  assert.match(result.episodes['1'].reason || '', /已修改|校验/)
+  assert.equal(w.images.length, 0)
+  assert.equal(w.videos.length, 0)
 })

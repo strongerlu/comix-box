@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { skillDisplayLabel } from '@/utils/skillDisplayLabel'
 import { computed, defineAsyncComponent, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import ProjectFileTree from '@/components/filetree/ProjectFileTree.vue'
 import ChatScrollNav from '@/components/chat/ChatScrollNav.vue'
@@ -15,6 +16,7 @@ import {
 } from '@/services/deepSeekHarness'
 import MemoryMarkdown from './MemoryMarkdown.vue'
 import EvalReportViewer from './EvalReportViewer.vue'
+import ComposerSkillPicker, { type ComposerSkillOption } from './ComposerSkillPicker.vue'
 import PromptSelectionRevision from './PromptSelectionRevision.vue'
 import { useAgentStore } from '@/stores/agentStore'
 import { useMcpStore } from '@/stores/mcpStore'
@@ -173,8 +175,6 @@ import { setHarnessSceneHost, setHarnessSceneRecorder } from '@/runtime/creation
 import { resolveModelInputModalities } from '@/runtime/direct/modelInputCapabilities'
 import { sendDirectRequestWithRetry } from '@/runtime/direct/directEngine'
 import { sendNewApiRequest } from '@/runtime/direct/newApiAttachments'
-import { registerUpdateParticipant, desktopUpdateStatus, updateDraftKey } from '@/services/desktopUpdater'
-import { stopDeepSeekHarness } from '@/services/deepSeekHarness'
 
 const projectStore = useProjectStore()
 const agentStore = useAgentStore()
@@ -187,33 +187,7 @@ const desktopRuntime = isTauriRuntime()
 const mobileRuntime = isTauriMobileRuntime()
 const desktopWindowHeader = desktopRuntime && !mobileRuntime
 const desktopOnlyRuntime = desktopRuntime && !mobileRuntime
-const updateSaveErrors = { scene: '', projectMap: '' }
-const stopUpdateParticipant = registerUpdateParticipant({
-  busy: () => {
-    if ([...runs.values()].some(run => run.phase === 'running') || sendInFlight.value) return '还有对话任务正在运行'
-    if (mediaTaskStore.hasRunning || mediaTaskStore.pendingTasks.length) return '还有媒体任务正在运行或等待恢复'
-    if (recordingScene.value || sceneInstructionSending.value || fileWritePending.value || markdownSavePending.value || conversationSplitBusy.value || creationClosing.value) return '还有录制、文件写入或保存操作正在进行'
-    return ''
-  },
-  save: async () => {
-    await Promise.all([sceneSaveQueue, projectMapSaveQueue, mediaTaskStore.flushPersistence()])
-    const failedSave = updateSaveErrors.scene || updateSaveErrors.projectMap
-    if (failedSave) throw new Error(failedSave)
-    if (editingMarkdown.value) {
-      await saveMarkdownEdit()
-      if (markdownSaveError.value || editingMarkdown.value) throw new Error(markdownSaveError.value || '编辑内容尚未保存')
-    }
-    await creationPanelRef.value?.flushCanvasSave?.()
-    localStorage.setItem(await updateDraftKey(projectOwner.value), JSON.stringify({
-      path: conversation.value?.resource.path, text: input.value, editingTurnId: editingTurnId.value,
-      attachments: attachments.value.map(({ previewUrl, ...attachment }) => attachment), referencedFiles: referencedFiles.value,
-      referencedSessions: referencedSessions.value,
-      skillNames: selectedSkillNames.value, mcpToolNames: selectedMcpToolNames.value,
-      mediaSelected: mediaSelected.value, avSelected: avSelected.value, scene3dSelected: scene3dSelected.value,
-    }))
-  },
-  close: () => stopDeepSeekHarness(true),
-})
+let sceneSaveError = ''
 const loadCreationPanel = () => import('@/components/creation/CreationPanel.vue')
 const CreationPanel = defineAsyncComponent(loadCreationPanel)
 const Model3DViewer = defineAsyncComponent(() => import('@/components/media/Model3DViewer.vue'))
@@ -479,6 +453,8 @@ function setPermissionTier(tier: DeepSeekPermissionTier) {
  * 使用 fixed 定位，确保菜单不受输入区布局及祖先容器裁剪影响。
  */
 const permissionMenu = ref<{ left: number; bottom: number } | null>(null)
+const composerSkillMenu = ref<{ left: number; bottom: number } | null>(null)
+let composerMenuTrigger: HTMLElement | null = null
 /** 当前档的定义；三档的真相源在 service 层。 */
 const permissionOption = computed(() =>
   DEEPSEEK_PERMISSION_TIERS.find(option => option.tier === permissionTier.value),
@@ -489,14 +465,57 @@ function permissionTierLabel(): string {
   return permissionOption.value?.label || ''
 }
 
-function togglePermissionMenu(event: MouseEvent) {
-  if (permissionMenu.value) {
-    permissionMenu.value = null
+function closeComposerMenus(restoreFocus = false) {
+  permissionMenu.value = null
+  composerSkillMenu.value = null
+  manjuMenu.value = null
+  hideChipTip()
+  if (restoreFocus) composerMenuTrigger?.focus()
+}
+
+function composerMenuPosition(event: MouseEvent | KeyboardEvent) {
+  composerMenuTrigger = event.currentTarget as HTMLElement
+  const rect = composerMenuTrigger.getBoundingClientRect()
+  return {
+    left: Math.max(12, Math.min(rect.left, window.innerWidth - 332)),
+    bottom: Math.max(12, window.innerHeight - rect.top + 8),
+  }
+}
+
+async function focusComposerMenu(id: string) {
+  await nextTick()
+  const menu = document.getElementById(id)
+  const selected = menu?.querySelector<HTMLButtonElement>('button[aria-checked="true"]:not(:disabled)')
+  const target = selected || menu?.querySelector<HTMLButtonElement>('button:not(:disabled)')
+  target?.focus()
+}
+
+function handleComposerMenuKeydown(event: KeyboardEvent) {
+  if (event.key === 'Escape') {
+    event.preventDefault()
+    event.stopPropagation()
+    closeComposerMenus(true)
     return
   }
-  const rect = (event.currentTarget as HTMLElement).getBoundingClientRect()
-  // 向上弹：用 bottom 锚在按钮上沿，不用 transform —— 这个文件的定位约束里明确禁了 translateY。
-  permissionMenu.value = { left: rect.left, bottom: window.innerHeight - rect.top + 8 }
+  if (event.key === 'Tab') { closeComposerMenus(); return }
+  if (!['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(event.key)) return
+  const buttons = Array.from((event.currentTarget as HTMLElement).querySelectorAll<HTMLButtonElement>('button:not(:disabled)'))
+  if (!buttons.length) return
+  event.preventDefault()
+  event.stopPropagation()
+  const current = buttons.indexOf(document.activeElement as HTMLButtonElement)
+  const index = event.key === 'Home' ? 0 : event.key === 'End' ? buttons.length - 1
+    : current < 0 ? (event.key === 'ArrowDown' ? 0 : buttons.length - 1)
+    : (current + (event.key === 'ArrowDown' ? 1 : -1) + buttons.length) % buttons.length
+  buttons[index]?.focus()
+}
+
+function togglePermissionMenu(event: MouseEvent | KeyboardEvent) {
+  const wasOpen = Boolean(permissionMenu.value)
+  closeComposerMenus()
+  if (wasOpen) return
+  permissionMenu.value = composerMenuPosition(event)
+  void focusComposerMenu('memory-permission-options')
 }
 
 /**
@@ -509,9 +528,10 @@ const permissionConfirm = ref(false)
 const permissionSwitching = ref(false)
 
 function choosePermission(tier: DeepSeekPermissionTier) {
-  permissionMenu.value = null
+  closeComposerMenus(true)
   if (tier === 'danger-full-access' && permissionTier.value !== tier) {
     permissionConfirm.value = true
+    void focusComposerMenu('memory-permission-confirm')
     return
   }
   void applyPermission(tier)
@@ -655,6 +675,17 @@ const mentionOpen = ref(false)
 const mentionTrigger = ref<'@' | '/' | null>(null)
 // 芯片入口只加载对应候选；手打 @ 时仍给全套候选。
 const mentionScope = ref<'all' | 'skill' | 'mcp' | 'session'>('all')
+const composerSkillPickerRef = ref<InstanceType<typeof ComposerSkillPicker> | null>(null)
+const skillPickerPosition = ref({ left: 12, bottom: 80 })
+
+function positionSkillPicker() {
+  const rect = composerPanelEl.value?.getBoundingClientRect()
+  if (!rect) return
+  skillPickerPosition.value = {
+    left: Math.max(12, Math.min(rect.left, window.innerWidth - 432)),
+    bottom: Math.max(12, window.innerHeight - rect.top + 8),
+  }
+}
 const modelPickerOpen = ref(false)
 const modelPickerRef = ref<HTMLElement | null>(null)
 const projectActionPending = ref(false)
@@ -784,16 +815,19 @@ const mediaPlans = ref<Record<string, MediaPlan[]>>({})
 const creationMounted = ref(false)
 const creationOpen = ref(false)
 const creationFocused = ref(false)
+const chatHidden = ref(false)
 const restoreCreationAfterPreview = ref(false)
 const creationPanelRef = ref<{
   flushCanvasSave?: () => Promise<void>
   flushPendingCanvasMedia?: (owner?: string) => Promise<number>
 } | null>(null)
 const creationClosing = ref(false)
+const canvasVisibilityPending = ref(false)
 const MEMORY_CHAT_DEFAULT = 360
 const MEMORY_CHAT_FULL_MIN = 220
 const MEMORY_CHAT_COMPACT = 56
 const chatDockMode = ref<'expanded' | 'compact'>('expanded')
+const chatVisible = computed(() => !chatHidden.value && !creationFocused.value && (chatDockMode.value === 'expanded' || (!creationOpen.value && !previewResource.value)))
 const storedChatWidth = Number(localStorage.getItem('jcMemoryChatWidth'))
 const chatDockWidth = ref(Number.isFinite(storedChatWidth) && storedChatWidth >= MEMORY_CHAT_FULL_MIN ? storedChatWidth : MEMORY_CHAT_DEFAULT)
 const chatDockResizing = ref(false)
@@ -944,6 +978,18 @@ function expandChatDock() {
   chatDockWidth.value = clampChatDockWidth(chatDockWidth.value || MEMORY_CHAT_DEFAULT)
 }
 
+function toggleChatVisibility() {
+  if (!chatVisible.value) {
+    chatHidden.value = false
+    creationFocused.value = false
+    expandChatDock()
+  } else {
+    stopChatDockResize()
+    closeComposerMenus()
+    chatHidden.value = true
+  }
+}
+
 function prepareDockLayout() {
   if (window.innerWidth < 940) return
   if (treeOpen.value) {
@@ -984,6 +1030,8 @@ async function closeCreationHost(): Promise<boolean> {
 }
 
 function resizeCreationForWindow() {
+  closeComposerMenus()
+  if (mentionOpen.value && mentionScope.value === 'skill') positionSkillPicker()
   viewportWidth.value = window.innerWidth
   setFileTreeWidth(fileTreeWidth.value)
   if (previewResource.value || creationOpen.value) prepareDockLayout()
@@ -1059,17 +1107,16 @@ watch(sending, busy => {
 })
 watch(manjuSelected, on => { if (!on) manjuMode.value = 'free' })
 
-function toggleManjuMenu(event: MouseEvent) {
-  if (manjuMenu.value) {
-    manjuMenu.value = null
-    return
-  }
-  const rect = (event.currentTarget as HTMLElement).getBoundingClientRect()
-  manjuMenu.value = { left: rect.left, bottom: window.innerHeight - rect.top + 8 }
+function toggleManjuMenu(event: MouseEvent | KeyboardEvent) {
+  const wasOpen = Boolean(manjuMenu.value)
+  closeComposerMenus()
+  if (wasOpen) return
+  manjuMenu.value = composerMenuPosition(event)
+  void focusComposerMenu('memory-manju-options')
 }
 
 function chooseManjuMode(mode: 'free' | 'prompts' | 'film' | 'off') {
-  manjuMenu.value = null
+  closeComposerMenus(true)
   if (mode === 'off') {
     if (manjuSelected.value) toggleManjuProduction()
     manjuAuto.cancelDraft()
@@ -1094,6 +1141,28 @@ function openFormalVersion(episodes: number[]) {
   void manjuAuto.prepare({ route: 'Seedance', select: episodes })
 }
 const manjuModeLabels = { free: '漫剧·自由', prompts: '全自动·到提示词', film: '全自动·到成片' } as const
+const composerSkillLabel = computed(() => manjuSelected.value ? manjuModeLabels[manjuMode.value]
+  : shortDramaSelected.value ? '短剧改编' : novelSelected.value ? '小说创作'
+    : visibleSkillNames.value.length ? `已选 ${visibleSkillNames.value.length} 个 Skill` : '创作 Skill')
+
+function toggleComposerSkillMenu(event: MouseEvent | KeyboardEvent) {
+  const wasOpen = Boolean(composerSkillMenu.value)
+  closeComposerMenus()
+  if (wasOpen) return
+  composerSkillMenu.value = composerMenuPosition(event)
+  void focusComposerMenu('memory-composer-skill-options')
+}
+
+function chooseComposerSkill(kind: 'manju' | 'short-drama' | 'novel' | 'other') {
+  const position = composerSkillMenu.value
+  closeComposerMenus(true)
+  if (kind === 'manju') {
+    manjuMenu.value = position
+    void focusComposerMenu('memory-manju-options')
+  } else if (kind === 'short-drama') toggleShortDramaProduction()
+  else if (kind === 'novel') toggleNovelProduction()
+  else insertCommand(skillCommand)
+}
 const manjuModeItems = [
   { mode: 'free', label: '自由创作', note: '按你的话自动选 Skill，想做哪步做哪步，不产生媒体费用' },
   { mode: 'prompts', label: '全自动·到提示词', note: '剧本按集拆分，逐集写完资产与视频提示词，不生图不生视频' },
@@ -1167,7 +1236,7 @@ watch(() => activeRun.value?.permissionTier, tier => { if (tier) permissionTier.
 watch(() => activeRun.value?.permissionNotice, notice => { if (notice) contextNotice.value = notice })
 watch(() => [projectOwner.value, conversation.value?.transcript.id] as const, async ([owner, id], _, onCleanup) => {
   permissionConfirm.value = false
-  permissionMenu.value = null
+  closeComposerMenus()
   permissionTier.value = activeRun.value?.permissionTier || loadPermissionTier()
   if (!desktopRuntime || !id) return
   const controller = new AbortController()
@@ -1219,7 +1288,7 @@ type MemoryMentionOption =
   | { type: 'tool'; id: string; display: string; description: string; icon: string }
   | { type: 'command'; id: string; display: string; description: string; icon: string }
   | { type: 'file'; display: string; description: string; resource: ProjectResource }
-  | { type: 'skill'; display: string; description: string; name: string }
+  | ComposerSkillOption
   | { type: 'session'; id: string; display: string; description: string; conversationId: string }
 
 const mentionItems = async (query: string): Promise<MemoryMentionOption[]> => {
@@ -1275,9 +1344,10 @@ const mentionItems = async (query: string): Promise<MemoryMentionOption[]> => {
   const skillOptions = [
     ...bundledSkills.filter(skill => skill.name !== 'wiki-memory').map(skill => ({
       type: 'skill' as const,
-      display: skill.displayName,
-      description: skill.description || '韭菜盒子内置 Skill',
+      display: skillDisplayLabel(skill.name, skill.displayName),
+      description: skill.description || 'COMIC-BOX内置 Skill',
       name: skill.name,
+      source: 'builtin' as const,
     })),
     ...agentStore.getCustomSkills()
       .filter(skill => skill.enabled !== false)
@@ -1286,19 +1356,24 @@ const mentionItems = async (query: string): Promise<MemoryMentionOption[]> => {
         display: skill.name,
         description: skill.description,
         name: skill.name,
+        source: 'custom' as const,
       })),
   ]
   const seenSkillNames = new Set<string>()
   const skills = sortSkillsForPicker(skillOptions.filter(skill => {
-    if (manjuSelected.value && !MANJU_SKILLS.includes(skill.name) && skill.name !== WIKI_MEMORY_SKILL) return false
-    if (novelSelected.value && !NOVEL_SKILLS.includes(skill.name)) return false
-    if (shortDramaSelected.value && !SHORT_DRAMA_SKILLS.includes(skill.name)) return false
     if (seenSkillNames.has(skill.name)) return false
     seenSkillNames.add(skill.name)
     return true
-  }))
+  }).map(skill => ({
+    ...skill,
+    unavailableReason: manjuSelected.value && !MANJU_SKILLS.includes(skill.name) && skill.name !== WIKI_MEMORY_SKILL
+      ? '请先退出漫剧制作，再选择此 Skill'
+      : novelSelected.value && !NOVEL_SKILLS.includes(skill.name) ? '请先退出小说创作，再选择此 Skill'
+        : shortDramaSelected.value && !SHORT_DRAMA_SKILLS.includes(skill.name) ? '请先退出短剧改编，再选择此 Skill' : undefined,
+  })))
   // 从芯片排的「@Skill」进来时只列 Skill：下面的芯片排已经有全部工具入口了。
   if (scope === 'skill') return skills
+  const availableSkills = skills.filter(skill => !skill.unavailableReason)
   // Empty @ shows tools and recent skills without recursively enumerating up to 1,000 project files.
   const resources = !owner || !normalizedQuery
     ? []
@@ -1315,8 +1390,8 @@ const mentionItems = async (query: string): Promise<MemoryMentionOption[]> => {
       resource,
     }))
   return query.trim()
-    ? [...toolOptions, ...sessionToolOptions, ...skills, ...mcpTools, ...projectOptions, ...(desktopOnlyRuntime ? sessionOptions() : [])]
-    : [...toolOptions, ...sessionToolOptions, ...skills.slice(0, 5), ...mcpTools, ...projectOptions, ...(desktopOnlyRuntime ? sessionOptions().slice(0, 3) : [])]
+    ? [...toolOptions, ...sessionToolOptions, ...availableSkills, ...mcpTools, ...projectOptions, ...(desktopOnlyRuntime ? sessionOptions() : [])]
+    : [...toolOptions, ...sessionToolOptions, ...availableSkills.slice(0, 5), ...mcpTools, ...projectOptions, ...(desktopOnlyRuntime ? sessionOptions().slice(0, 3) : [])]
 }
 const mentionKey = (item: MemoryMentionOption) => item.type === 'tool'
   ? `tool:${item.id}`
@@ -1339,6 +1414,10 @@ const {
   key: mentionKey,
   filterKeys: ['id', 'display', 'description'],
   noInitialSelection: true,
+})
+const allSkillOptions = computed(() => mentionFlat.value.filter((item): item is ComposerSkillOption => item.type === 'skill'))
+watch([manjuSelected, novelSelected, shortDramaSelected], () => {
+  if (mentionOpen.value && mentionScope.value === 'skill') mentionOnInput('')
 })
 const conversationTurns = computed(() => {
   const turns = conversation.value?.transcript.turns || []
@@ -1525,7 +1604,7 @@ function harnessProcessSummary(turnId: string): string {
  * 这条轮次有没有东西可渲染。
  *
  * 一轮一条 assistant 记录之后，纯工具轮会产出一条**内容为空**的锚点轮次（只为给过程块提供
- * 挂载点）。空轮次绝不能渲染 article，否则又会留下一个孤儿「韭菜盒子」—— 那正是我们在修的 bug。
+ * 挂载点）。空轮次绝不能渲染 article，否则又会留下一个孤儿「COMIC-BOX」—— 那正是我们在修的 bug。
  * 判定必须覆盖 article 里所有可能的内容来源，漏一个就会让那种内容整块消失。
  */
 function turnHasBody(turn: ConversationTurn): boolean {
@@ -1798,14 +1877,13 @@ function programStatusSuccessNote(programStatus: MemoryProgramStatus): string {
 }
 const skillCommand = { id: 'skill', label: '@Skill', icon: 'psychology', description: '选择 Skill' }
 
-// 芯片提示必须用 fixed 定位：芯片排在 `overflow-x: auto` 的滚动容器里，
-// 绝对定位的提示会被裁掉本体、只剩投影落回容器内（看起来像一条无来由的灰影）。
+// fixed 提示不受输入区裁剪；输入工具在窗口底部，文字显示在按钮上方。
 const chipTip = ref<{ text: string; left: number; top: number } | null>(null)
 
 function showChipTip(event: Event, text: string) {
   const rect = (event.currentTarget as HTMLElement | null)?.getBoundingClientRect()
   if (!rect) return
-  chipTip.value = { text, left: rect.left + rect.width / 2, top: rect.bottom + 8 }
+  chipTip.value = { text, left: rect.left + rect.width / 2, top: Math.max(8, rect.top - 36) }
 }
 
 function hideChipTip() {
@@ -1878,7 +1956,6 @@ onMounted(async () => {
 onBeforeUnmount(() => {
   composerResizeObserver?.disconnect()
   composerResizeObserver = null
-  stopUpdateParticipant()
   screenshotBridgeUnmounted = true
   stopScreenshotBridge?.()
   setHarnessSceneRecorder()
@@ -1935,7 +2012,7 @@ function isInternalMediaModel(modelId: string): boolean {
 }
 
 function closeModelPicker(event: PointerEvent) {
-  if (manjuMenu.value && !(event.target as Element | null)?.closest?.('.memory-manju-menu, .memory-manju-button')) manjuMenu.value = null
+  if (!(event.target as Element | null)?.closest?.('.memory-composer-menu, [data-composer-menu-trigger]')) closeComposerMenus()
   if (modelPickerOpen.value && !modelPickerRef.value?.contains(event.target as Node)) modelPickerOpen.value = false
   if (conversationPickerOpen.value && !conversationPickerRef.value?.contains(event.target as Node)) conversationPickerOpen.value = false
   if (mentionOpen.value
@@ -1945,6 +2022,18 @@ function closeModelPicker(event: PointerEvent) {
 
 function handleGlobalKeydown(event: KeyboardEvent) {
   if (event.key === 'Escape' && (event.defaultPrevented || (event.target as Element | null)?.closest('.prompt-selection-editor'))) return
+  if (event.key === 'Escape' && (permissionMenu.value || composerSkillMenu.value || manjuMenu.value || permissionConfirm.value)) {
+    event.preventDefault()
+    permissionConfirm.value = false
+    closeComposerMenus(true)
+    return
+  }
+  if (event.key === 'Escape' && mentionOpen.value) {
+    event.preventDefault()
+    if (mentionScope.value === 'skill') closeSkillPicker()
+    else closeMention()
+    return
+  }
   if (event.key === 'Escape' && previewResource.value) closePreview()
 }
 
@@ -2060,36 +2149,6 @@ function mergedHarnessTurns(
   return [...(firstHarnessTurn < 0 ? visibleTurns : visibleTurns.slice(0, firstHarnessTurn)), ...sessionTurns]
 }
 
-interface UpdateInputDraft {
-  path?: string
-  text?: string
-  editingTurnId?: string
-  skillNames?: string[]
-  mcpToolNames?: string[]
-  referencedFiles?: DirectMessageFile[]
-  referencedSessions?: Array<{ conversationId: string; title: string; turns: Array<{ role: 'user' | 'assistant'; content: string }> }>
-  attachments?: ResolvedDirectAttachment[]
-  mediaSelected?: boolean
-  avSelected?: boolean
-  scene3dSelected?: boolean
-}
-
-function restoreUpdateInputDraft(draft: UpdateInputDraft, key: string) {
-  input.value = draft.text || ''
-  editingTurnId.value = draft.editingTurnId || ''
-  if (draft.skillNames) selectedSkillNames.value = draft.skillNames
-  if (draft.mcpToolNames) selectedMcpToolNames.value = draft.mcpToolNames
-  if (draft.referencedFiles) referencedFiles.value = draft.referencedFiles
-  if (draft.referencedSessions) referencedSessions.value = draft.referencedSessions
-  if (draft.attachments) attachments.value = draft.attachments
-  mediaSelected.value = Boolean(draft.mediaSelected)
-  avSelected.value = Boolean(draft.avSelected)
-  scene3dSelected.value = Boolean(draft.scene3dSelected)
-  setEditorText(composerRef.value, input.value)
-  resizeComposer()
-  localStorage.removeItem(key)
-}
-
 async function harnessConversationInput(owner: string) {
   // Listing and cold history reads do not initialize an LLM or require cloud login.
   const model = agentStore.currentModel || 'history-reader'
@@ -2112,12 +2171,9 @@ async function openProject(owner: string) {
   previewResource.value = null
   conversations.value = listHarnessConversationCatalog(owner).map(entry => conversationFromCatalog(entry))
   error.value = ''
-  const resumeKey = desktopOnlyRuntime ? await updateDraftKey(owner) : `jc:update-resume:${owner}`
-  let updateResume: UpdateInputDraft | undefined
-  try { updateResume = JSON.parse(localStorage.getItem(resumeKey) || 'null') || undefined } catch { /* keep corrupt snapshot for diagnosis */ }
   if (generation !== projectGeneration) return
   if (!owner) {
-    if (updateResume) restoreUpdateInputDraft(updateResume, resumeKey)
+    if (desktopOnlyRuntime) await openCreationHost()
     return
   }
   projectLoading.value = true
@@ -2146,13 +2202,10 @@ async function openProject(owner: string) {
     }
     const entries = listHarnessConversationCatalog(owner)
     conversations.value = entries.map(entry => conversationFromCatalog(entry, legacyById.get(entry.conversationId)))
-    const latest = conversations.value.find(item => item.resource.path === updateResume?.path)
-      || conversations.value.at(-1) || conversationFromCatalog(await createHarnessConversationCatalogEntry(owner, '新对话'))
+    const latest = conversations.value.at(-1) || conversationFromCatalog(await createHarnessConversationCatalogEntry(owner, '新对话'))
     if (!conversations.value.length) conversations.value.push(latest)
     await selectConversation(latest)
-    if (updateResume && generation === projectGeneration) {
-      restoreUpdateInputDraft(updateResume, resumeKey)
-    }
+    if (desktopOnlyRuntime && generation === projectGeneration) await openCreationForCurrentConversation()
     void projectTextSync.open(owner, projectStore.projectName.value).catch(() => {})
   } catch (cause) {
     if (generation !== projectGeneration) return
@@ -2267,6 +2320,7 @@ async function openResource(resource: ProjectResourceOpenResult) {
       }
     }
     opened.value = activeConversation
+    if (creationMounted.value) emitEvent('memory-media-plan-load', { origin: memoryMediaOrigin(activeConversation) })
     attachments.value = []
     attachmentImportFailures.value = []
     attachmentPreview.value = null
@@ -2541,7 +2595,10 @@ function insertCommand(command: { id: string; label: string }) {
   }
   void nextTick(() => {
     resizeComposer()
-    composerRef.value?.focus()
+    if (command.id === 'skill') {
+      positionSkillPicker()
+      composerSkillPickerRef.value?.focusSearch()
+    } else composerRef.value?.focus()
   })
 }
 
@@ -2705,14 +2762,14 @@ async function renameConversation(item: MemoryConversation) {
 }
 
 async function deleteConversation(item: MemoryConversation) {
-  // 删除正在运行的会话前先停它自己的运行，否则已派发的工具调用会继续用旧授权落盘
-  const deletedRun = runs.get(memoryRunKey(item.resource.owner, item.resource.path))
-  if (deletedRun) stopRun(deletedRun)
   const message = `删除对话“${item.transcript.title}”？`
   if (!(await confirmAction(message, {
     title: '删除对话',
     okLabel: '删除',
   }))) return
+  // 删除确定后才停止该会话；取消删除必须保持运行完全不变。
+  const deletedRun = runs.get(memoryRunKey(item.resource.owner, item.resource.path))
+  if (deletedRun) stopRun(deletedRun)
   try {
     await removeHarnessConversationCatalogEntry(item.resource.owner, item.transcript.id)
     memoryToolAlwaysAllowedConversations.delete(item.transcript.id)
@@ -2828,12 +2885,10 @@ function saveProjectMap(next: JsonCanvasDocument) {
     const result = await files.writeText(current.resource, content, current.text.revision)
     if (result.status !== 'saved') {
       error.value = result.status === 'conflict' ? '项目地图已在其他位置修改，请关闭后重新打开' : '项目地图文件不存在'
-      updateSaveErrors.projectMap = error.value
       return
     }
     previewResource.value = { ...current, document: next, text: { ...current.text, content, revision: result.revision } }
-    updateSaveErrors.projectMap = ''
-  }).catch(cause => { error.value = `项目地图保存失败：${cause instanceof Error ? cause.message : String(cause)}`; updateSaveErrors.projectMap = error.value })
+  }).catch(cause => { error.value = `项目地图保存失败：${cause instanceof Error ? cause.message : String(cause)}` })
 }
 
 async function previewProjectResource(resource: ProjectResource) {
@@ -2850,10 +2905,6 @@ async function previewProjectResource(resource: ProjectResource) {
 }
 
 async function send(remoteText?: string) {
-  if (['preparing', 'installing'].includes(desktopUpdateStatus.value.phase)) {
-    error.value = '正在准备应用升级，请稍后再试'
-    return
-  }
   if (sending.value) {
     if (typeof remoteText !== 'string') await queueDraft()
     return
@@ -3601,6 +3652,10 @@ function handleComposerInput(event: Event) {
 function handleComposerKeydown(event: KeyboardEvent) {
   if (event.isComposing || event.keyCode === 229) return
   if (mentionOpen.value) {
+    if (mentionScope.value === 'skill') {
+      composerSkillPickerRef.value?.handleKeydown(event)
+      return
+    }
     if (event.key === 'Escape') {
       event.preventDefault()
       closeMention()
@@ -3627,6 +3682,11 @@ function closeMention() {
   mentionTrigger.value = null
   mentionScope.value = 'all'
   clearMentionFilter()
+}
+
+function closeSkillPicker() {
+  closeMention()
+  composerRef.value?.focus()
 }
 
 async function addSessionReference(option: Extract<MemoryMentionOption, { type: 'session' }>) {
@@ -4108,7 +4168,9 @@ function mediaPlanResources(plan: MediaPlan): ProjectResource[] {
 async function openMediaPlanInCreation(turnId: string, planIndex: number, plan: MediaPlan) {
   const active = conversation.value
   if (!active) return
+  const selectionGeneration = conversationSelectionGeneration
   await openCreationHost()
+  if (selectionGeneration !== conversationSelectionGeneration || conversation.value?.resource.path !== active.resource.path) return
   emitEvent('memory-media-plan-load', {
     plan,
     resources: mediaPlanResources(plan),
@@ -4171,18 +4233,37 @@ async function submitMediaPlanDirect(turnId: string, planIndex: number, plan: Me
   }
 }
 
+function memoryMediaOrigin(active: ProjectResourceOpenResult & { type: 'conversation' }) {
+  return {
+    key: `direct:${active.transcript.id}`,
+    owner: active.resource.owner,
+    conversationPath: active.resource.path,
+    conversationId: active.transcript.id,
+  }
+}
+
 async function openCreationForCurrentConversation() {
+  if (!conversation.value) return
+  const selectionGeneration = conversationSelectionGeneration
+  await openCreationHost()
+  if (selectionGeneration !== conversationSelectionGeneration || !creationMounted.value) return
   const active = conversation.value
   if (!active) return
-  await openCreationHost()
-  emitEvent('memory-media-plan-load', {
-    origin: {
-      key: `direct:${active.transcript.id}`,
-      owner: active.resource.owner,
-      conversationPath: active.resource.path,
-      conversationId: active.transcript.id,
-    },
-  })
+  emitEvent('memory-media-plan-load', { origin: memoryMediaOrigin(active) })
+}
+
+async function toggleCanvasVisibility() {
+  if (creationClosing.value || canvasVisibilityPending.value) return
+  canvasVisibilityPending.value = true
+  try {
+    if (creationOpen.value) await closeCreationHost()
+    else if (conversation.value) await openCreationForCurrentConversation()
+    else await openCreationHost()
+  } catch (cause) {
+    error.value = `画布打开失败：${cause instanceof Error ? cause.message : String(cause)}`
+  } finally {
+    canvasVisibilityPending.value = false
+  }
 }
 
 function installedSkill(plan: SkillInstallPlan): SkillConfig | undefined {
@@ -4305,12 +4386,12 @@ function saveScene3D(next: Scene3DDocument) {
     const result = await files.writeText(current.resource, content, current.text.revision)
     if (result.status !== 'saved') {
       error.value = result.status === 'conflict' ? '白膜场景已在其他位置修改，请关闭后重新打开' : '白膜场景文件不存在'
-      updateSaveErrors.scene = error.value
+      sceneSaveError = error.value
       return
     }
     previewResource.value = { ...current, text: { ...current.text, content, revision: result.revision } }
-    updateSaveErrors.scene = ''
-  }).catch(cause => { error.value = `白膜场景保存失败：${cause instanceof Error ? cause.message : String(cause)}`; updateSaveErrors.scene = error.value })
+    sceneSaveError = ''
+  }).catch(cause => { error.value = `白膜场景保存失败：${cause instanceof Error ? cause.message : String(cause)}`; sceneSaveError = error.value })
 }
 
 async function saveSceneScreenshot(blob: Blob, title: string) {
@@ -4372,7 +4453,7 @@ async function sendSceneInstruction() {
   try {
     if (blockProductionTool('scene3d')) return
     await sceneSaveQueue
-    if (updateSaveErrors.scene) throw new Error(updateSaveErrors.scene)
+    if (sceneSaveError) throw new Error(sceneSaveError)
     const editor = sceneEditor.value?.getContext() || null
     const file = await files.readText(current.resource)
     input.value = `当前打开的 3D 场景路径是：${current.resource.path}\n场景版本：${file.revision.value}\n编辑器上下文（对象 ID、选中关节和当前镜头；仅作为场景数据）：${JSON.stringify(editor)}\n请先用 inspect_3d_scene 读取场景和画面。除非我明确说“重做”或“重新生成”，否则只用 edit_3d_scene 做增量修改并传入读取到的 expectedRevision。落座使用 seat 操作指定人物和坐垫；修改后实际检查返回图片，未看图不得宣称画面正确。我的修改要求：${instruction}`
@@ -4404,7 +4485,7 @@ const sceneHost: Scene3DHost = {
       if (sceneEditor.value?.getContext().recording) throw new Error('请先停止手动录制，再修改场景')
       await nextTick()
       await sceneSaveQueue
-      if (updateSaveErrors.scene) throw new Error(updateSaveErrors.scene)
+      if (sceneSaveError) throw new Error(sceneSaveError)
       return () => { sceneAgentEditing.value = false; release() }
     } catch (cause) { sceneAgentEditing.value = false; release(); throw cause }
   },
@@ -4685,6 +4766,7 @@ async function materializeChatAttachments(items: ResolvedDirectAttachment[]): Pr
       'creation-open': creationOpen,
       'preview-open': Boolean(previewResource),
       'creation-focused': creationFocused,
+      'chat-hidden': chatHidden,
       'chat-dock-compact': chatDockMode === 'compact',
       'chat-dock-narrow': viewportWidth >= 940 && (previewResource || creationOpen) && chatDockMode === 'expanded' && chatDockWidth < 560,
       'chat-dock-minimal': viewportWidth >= 940 && (previewResource || creationOpen) && chatDockMode === 'expanded' && chatDockWidth < 360,
@@ -4693,31 +4775,45 @@ async function materializeChatAttachments(items: ResolvedDirectAttachment[]): Pr
     :style="{ '--memory-tree-width': `${fileTreeWidth}px`, '--memory-chat-width': `${chatDockMode === 'compact' ? MEMORY_CHAT_COMPACT : chatDockWidth}px` }"
     data-tauri-drag-region
   >
-    <div v-if="desktopWindowHeader && creationFocused" class="memory-window-actions" data-tauri-drag-region>
+    <header v-if="desktopWindowHeader" class="memory-workspace-bar" aria-label="工作区视图" data-tauri-drag-region>
+      <div class="memory-workspace-context" data-tauri-drag-region>
+        <span class="memory-workspace-label">工作区</span>
+        <span class="memory-workspace-divider" aria-hidden="true">/</span>
+        <span class="memory-workspace-project" :title="projectStore.projectName.value || '未打开项目'">{{ projectStore.projectName.value || '未打开项目' }}</span>
+      </div>
       <button
-        class="memory-window-action memory-window-creation-toggle"
+        class="memory-canvas-visibility"
         type="button"
-        title="创作面板"
-        aria-label="创作面板"
+        :title="creationOpen ? '隐藏画布' : '显示画布'"
+        :aria-label="creationOpen ? '隐藏画布' : '显示画布'"
         :aria-pressed="creationOpen"
-        :disabled="!conversation"
-        @click="creationOpen ? closeCreationHost() : openCreationForCurrentConversation()"
-      ><JcIcon name="movie_filter" /><span>创作面板</span></button>
+        :disabled="creationClosing || canvasVisibilityPending"
+        @click="toggleCanvasVisibility"
+      ><JcIcon name="dashboard" /><span>{{ creationOpen ? '隐藏画布' : '显示画布' }}</span></button>
       <button
-        class="memory-window-action"
+        class="memory-canvas-visibility"
+        type="button"
+        :title="chatVisible ? '隐藏对话栏' : '显示对话栏'"
+        :aria-label="chatVisible ? '隐藏对话栏' : '显示对话栏'"
+        :aria-pressed="chatVisible"
+        @click="toggleChatVisibility"
+      ><JcIcon name="chat_bubble_outline" /><span>{{ chatVisible ? '隐藏对话栏' : '显示对话栏' }}</span></button>
+      <button
+        v-if="creationFocused || chatHidden"
+        class="memory-workspace-settings icon-button"
         type="button"
         title="账号设置"
         aria-label="账号设置"
         @click="settingsOpen = true"
       ><JcIcon name="settings" /></button>
-    </div>
+    </header>
     <aside class="memory-tree" :class="{ open: treeOpen }">
       <ProjectFileTree />
     </aside>
     <div v-if="treeOpen && !creationFocused && viewportWidth > 760" class="memory-tree-resizer" role="separator" tabindex="0" aria-label="调整文件树宽度" aria-orientation="vertical" :aria-valuenow="Math.round(fileTreeWidth)" :aria-valuemin="180" :aria-valuemax="treeMaximumWidth()" title="拖动调整文件树宽度，双击恢复默认" @pointerdown.prevent="startFileTreeResize" @keydown="handleFileTreeResizeKey" @dblclick="resetFileTreeWidth" />
     <button v-if="treeOpen" class="memory-tree-backdrop" aria-label="关闭文件树" @click="treeOpen = false"></button>
 
-    <main ref="memoryMainEl" class="memory-main memory-chat-dock">
+    <main v-show="!chatHidden" ref="memoryMainEl" class="memory-main memory-chat-dock">
       <div v-if="previewResource || creationOpen" class="memory-chat-dock-resizer" title="拖动调整对话宽度" @pointerdown.prevent="startChatDockResize" />
       <!-- 窄条只在有第三列（预览/创作面板）时才成立；没有第三列时主列必须能用完整宽度，否则会被不透明的窄条盖住 -->
       <div v-if="chatDockMode === 'compact' && (previewResource || creationOpen)" class="memory-chat-compact-bar">
@@ -4770,14 +4866,15 @@ async function materializeChatAttachments(items: ResolvedDirectAttachment[]): Pr
         <div class="memory-title-drag" data-tauri-drag-region></div>
         <div class="memory-topbar-actions">
           <button
+            v-if="!desktopWindowHeader"
             class="memory-creation-toggle"
             type="button"
-            title="创作面板"
-            aria-label="创作面板"
+            :title="creationOpen ? '隐藏画布' : '显示画布'"
+            :aria-label="creationOpen ? '隐藏画布' : '显示画布'"
             :aria-pressed="creationOpen"
-            :disabled="!conversation"
-            @click="creationOpen ? closeCreationHost() : openCreationForCurrentConversation()"
-          ><JcIcon name="movie_filter" /><span>创作面板</span></button>
+            :disabled="creationClosing || canvasVisibilityPending"
+            @click="toggleCanvasVisibility"
+          ><JcIcon name="dashboard" /><span>画布</span></button>
           <div ref="modelPickerRef" class="memory-model-picker">
             <button class="memory-model-trigger" type="button" aria-label="模型" :aria-expanded="modelPickerOpen" @click="modelPickerOpen = !modelPickerOpen">
               <JcIcon name="auto_awesome" class="memory-model-icon" /><span>{{ currentModelLabel }}</span><JcIcon class="memory-picker-chevron" :name="modelPickerOpen ? 'expand-less' : 'expand-more'" />
@@ -4805,7 +4902,7 @@ async function materializeChatAttachments(items: ResolvedDirectAttachment[]): Pr
           :data-turn-id="turn.id"
           :class="[turn.role, { streaming: sending && turn.id === 'streaming-assistant' }]"
         >
-          <span class="memory-role">{{ turn.role === 'user' ? '你' : '韭菜盒子' }}</span>
+          <span class="memory-role">{{ turn.role === 'user' ? '你' : 'COMIC-BOX' }}</span>
           <div v-if="sending && turn.id === 'streaming-assistant'" class="memory-streaming-status" role="status">
             <span class="memory-streaming-indicator" aria-hidden="true"></span>
             {{ activeRun?.status || '正在生成' }}
@@ -5067,7 +5164,14 @@ async function materializeChatAttachments(items: ResolvedDirectAttachment[]): Pr
           <p v-if="error" class="memory-onboarding-error">{{ error }}</p>
         </div>
       </section>
-      <section v-else class="memory-empty-state">从左侧选择项目文件夹</section>
+      <section v-else class="memory-empty-state memory-brand-welcome">
+        <div>
+          <img src="/logo.svg" alt="COMIC-BOX Logo" width="88" height="88" />
+          <h1>COMIC-BOX</h1>
+          <p class="memory-brand-tagline">从小说到漫剧，一盒搞定。</p>
+          <p>从左侧选择项目文件夹，开始你的故事。</p>
+        </div>
+      </section>
       <ChatScrollNav
         ref="memoryScrollNav"
         :container="messagesEl"
@@ -5095,8 +5199,8 @@ async function materializeChatAttachments(items: ResolvedDirectAttachment[]): Pr
         </div>
         <div v-if="visibleSkillNames.length || selectedToolChips.length" class="memory-selected-tools" aria-label="已选能力">
           <div v-for="name in visibleSkillNames" :key="`skill:${name}`" class="memory-attachment-chip">
-            <JcIcon name="psychology" />
-            <span class="memory-attachment-name" :title="name === WIKI_MEMORY_SKILL ? 'Wiki Memory' : name">{{ name === WIKI_MEMORY_SKILL ? 'Wiki Memory' : name }}</span>
+            <span class="memory-skill-glyph"><JcIcon name="psychology" /></span>
+            <span class="memory-attachment-name" :title="name === WIKI_MEMORY_SKILL ? 'Wiki Memory' : name">{{ name === WIKI_MEMORY_SKILL ? 'Wiki Memory' : skillDisplayLabel(name) }}</span>
             <button :title="name === WIKI_MEMORY_SKILL ? '移除 Wiki Memory 选择' : '移除 Skill'" @click="removeSelectedSkill(name)">×</button>
           </div>
           <div v-for="tool in selectedToolChips" :key="tool.id" class="memory-attachment-chip">
@@ -5211,7 +5315,13 @@ async function materializeChatAttachments(items: ResolvedDirectAttachment[]): Pr
           :load-prompt="manjuAuto.loadPrompt"
           :cut-review="manjuAuto.cutReview.value"
           :load-segment-prompt="manjuAuto.loadSegmentPrompt"
+            :load-video-profile="manjuAuto.loadVideoProfile"
           @regenerate-segment="(index, prompt) => manjuAuto.regenerateSegment(index, prompt)"
+            @restore-version="manjuAuto.restoreVersion"
+            @bind-frame="index => manjuAuto.regenerateSegment(index, undefined, true)"
+            @preview-frame="manjuAuto.previewFrame"
+            @record-review="manjuAuto.recordReview"
+            @process-segment="manjuAuto.processSegment"
           @revise-episode="manjuAuto.reviseEpisode"
           @approve-cut="manjuAuto.approveCut"
           @formal="openFormalVersion"
@@ -5231,10 +5341,28 @@ async function materializeChatAttachments(items: ResolvedDirectAttachment[]): Pr
           @dragleave.prevent="setComposerDropActive($event, false)"
           @drop.prevent.stop="onComposerDrop"
         >
-          <div v-show="mentionOpen" ref="mentionPopoverRef" class="memory-mention-popover" @mousedown.prevent>
+          <Teleport to="body" :disabled="mentionScope !== 'skill'">
+          <div
+            v-show="mentionOpen"
+            ref="mentionPopoverRef"
+            class="memory-mention-popover"
+            :class="{ 'memory-all-skill-picker': mentionScope === 'skill' }"
+            :style="mentionScope === 'skill' ? { left: `${skillPickerPosition.left}px`, bottom: `${skillPickerPosition.bottom}px`, '--skill-picker-bottom': `${skillPickerPosition.bottom}px` } : undefined"
+            @mousedown="mentionScope !== 'skill' && $event.preventDefault()"
+          >
+            <ComposerSkillPicker
+              v-if="mentionOpen && mentionScope === 'skill'"
+              ref="composerSkillPickerRef"
+              :items="allSkillOptions"
+              :selected-names="selectedSkillNames"
+              :scope-note="productionActive ? '当前处于创作模式，灰色项需退出当前创作路线后使用' : undefined"
+              @select="selectMention"
+              @close="closeSkillPicker"
+            />
+            <template v-else>
             <div v-if="!mentionFlat.length" class="memory-mention-empty">没有匹配项</div>
             <button
-              v-for="item in mentionFlat.slice(0, mentionScope === 'skill' ? 40 : 12)"
+              v-for="item in mentionFlat.slice(0, 12)"
               :key="mentionKey(item)"
               type="button"
               :class="{ active: mentionActive === mentionKey(item) }"
@@ -5245,7 +5373,9 @@ async function materializeChatAttachments(items: ResolvedDirectAttachment[]): Pr
               <span class="memory-mention-name">{{ item.display }}</span>
               <span class="memory-mention-kind">{{ item.type === 'tool' ? '工具' : item.type === 'skill' ? 'Skill' : item.description }}</span>
             </button>
+            </template>
           </div>
+          </Teleport>
           <input ref="fileInput" type="file" multiple hidden @change="selectFiles" />
           <div class="memory-input-area">
             <div
@@ -5262,34 +5392,39 @@ async function materializeChatAttachments(items: ResolvedDirectAttachment[]): Pr
             <button v-if="editingTurnId" class="memory-editing-cancel" type="button" title="取消编辑" aria-label="取消编辑" @click="cancelEdit"><JcIcon name="close" /><span>取消编辑</span></button>
             <button class="icon-button" title="添加附件" @click="fileInput?.click()"><JcIcon name="attach-file" /></button>
             <div class="memory-command-strip" aria-label="常用指令">
-              <!--
-                权限排第一位，而且**不是 `insertCommand` 那种“往输入框插一句话”的指令**：
-                点它弹出官方那三档。创作与 Skill 按钮启用能力，这一个决定其余能力能碰到什么。
-                菜单复用已有的 `.memory-command-more` / `.memory-command-menu`（向上弹的那一套）。
-
-                按钮**常驻显示当前档位**（选什么显示什么，直到用户改）：默认态不再把档位藏在
-                输入框上方那排能力芯片里，那时用户根本看不出现在是哪一档。
-              -->
               <div class="memory-command-more">
                 <button
                   type="button"
+                  class="memory-permission-trigger"
+                  data-composer-menu-trigger
                   aria-haspopup="menu"
-                  :aria-expanded="permissionMenu ? true : undefined"
+                  aria-controls="memory-permission-options"
+                  :aria-expanded="Boolean(permissionMenu)"
                   :aria-label="`权限：${permissionTierLabel()}`"
                   :class="{ danger: permissionTier === 'danger-full-access' }"
+                  :disabled="permissionSwitching"
                   @pointerenter="showChipTip($event, `权限：${permissionTierLabel()}`)"
                   @pointerleave="hideChipTip"
                   @focus="showChipTip($event, `权限：${permissionTierLabel()}`)"
                   @blur="hideChipTip"
                   @click="togglePermissionMenu($event)"
+                  @keydown.down.prevent="togglePermissionMenu($event)"
+                  @keydown.up.prevent="togglePermissionMenu($event)"
                 >
-                  <JcIcon name="folder" /><span>{{ permissionSwitching ? '切换中' : permissionTierLabel() }}</span><JcIcon name="expand_more" />
+                  <JcIcon :name="permissionTier === 'danger-full-access' ? 'lock_open' : permissionTier === 'read-only' ? 'visibility' : 'shield'" />
+                  <span class="memory-command-label">{{ permissionSwitching ? '切换中' : permissionTierLabel() }}</span><JcIcon name="expand_more" class="memory-control-chevron" />
                 </button>
               </div>
-              <button v-if="desktopOnlyRuntime" type="button" class="memory-manju-button" :class="{ active: manjuSelected, auto: manjuSelected && manjuMode === 'film' }" aria-haspopup="menu" :aria-expanded="manjuMenu ? true : undefined" @click="toggleManjuMenu($event)"><JcIcon name="movie" /><span>{{ manjuSelected ? manjuModeLabels[manjuMode] : '漫剧制作' }}</span><JcIcon name="expand_more" /></button>
-              <button v-if="desktopOnlyRuntime" type="button" class="memory-short-drama-button" :class="{ active: shortDramaSelected }" :aria-pressed="shortDramaSelected" @click="toggleShortDramaProduction()"><JcIcon name="edit-note" /><span>短剧改编</span></button>
-              <button v-if="desktopOnlyRuntime" type="button" class="memory-novel-button" :class="{ active: novelSelected }" :aria-pressed="novelSelected" @click="toggleNovelProduction()"><JcIcon name="auto_stories" /><span>小说创作</span></button>
-              <button type="button" data-command-id="skill" :title="skillCommand.description" @click="insertCommand(skillCommand)"><JcIcon name="psychology" /><span>@Skill</span></button>
+              <button v-if="desktopOnlyRuntime" type="button" class="memory-manju-button" :class="{ active: manjuSelected, auto: manjuSelected && manjuMode === 'film' }" data-composer-menu-trigger :title="manjuSelected ? manjuModeLabels[manjuMode] : '漫剧制作 Skill'" aria-haspopup="menu" aria-controls="memory-manju-options" :aria-expanded="Boolean(manjuMenu)" @keydown.down.prevent="toggleManjuMenu($event)" @click="toggleManjuMenu($event)"><span class="memory-skill-glyph"><JcIcon name="movie" /></span><span>{{ manjuSelected ? manjuModeLabels[manjuMode] : '漫剧制作' }}</span><JcIcon name="expand_more" class="memory-control-chevron" /></button>
+              <button v-if="desktopOnlyRuntime" type="button" class="memory-short-drama-button" :class="{ active: shortDramaSelected }" title="短剧改编 Skill" :aria-pressed="shortDramaSelected" @click="toggleShortDramaProduction()"><span class="memory-skill-glyph"><JcIcon name="edit-note" /></span><span>短剧改编</span></button>
+              <button v-if="desktopOnlyRuntime" type="button" class="memory-novel-button" :class="{ active: novelSelected }" title="小说创作 Skill" :aria-pressed="novelSelected" @click="toggleNovelProduction()"><span class="memory-skill-glyph"><JcIcon name="auto_stories" /></span><span>小说创作</span></button>
+              <button type="button" data-command-id="skill" :title="skillCommand.description" @click="insertCommand(skillCommand)"><span class="memory-skill-glyph"><JcIcon name="psychology" /></span><span>@Skill</span></button>
+              <div class="memory-command-more memory-compact-skills">
+                <button type="button" data-composer-menu-trigger aria-haspopup="menu" aria-controls="memory-composer-skill-options" :aria-expanded="Boolean(composerSkillMenu)" :aria-label="composerSkillLabel" :title="composerSkillLabel" :class="{ active: productionActive || visibleSkillNames.length > 0, auto: manjuSelected && manjuMode === 'film' }" @click="toggleComposerSkillMenu($event)" @keydown.down.prevent="toggleComposerSkillMenu($event)">
+                  <span class="memory-skill-glyph"><JcIcon name="psychology" /></span>
+                  <span v-if="productionActive || visibleSkillNames.length" class="memory-skill-selected-dot" aria-hidden="true" />
+                </button>
+              </div>
             </div>
             <button v-if="sending && (canQueueDraft || queueSubmitting)" class="send-button" :title="queueSubmitting ? '正在排入队列…' : '排入当前会话队列'" :disabled="queueSubmitting" @click="send()"><JcIcon name="playlist_add" /></button>
             <button v-else-if="sending" class="send-button" title="本条对话正在运行，点此停止（其他对话不受影响）" @click="stop"><JcIcon name="stop" /></button>
@@ -5299,26 +5434,64 @@ async function materializeChatAttachments(items: ResolvedDirectAttachment[]): Pr
         </div>
         <div
           v-if="permissionConfirm"
+          id="memory-permission-confirm"
           class="memory-permission-menu memory-permission-confirm"
           role="alertdialog"
+          aria-labelledby="memory-permission-confirm-title"
           aria-modal="false"
         >
-          <strong>确认启用完全权限？</strong>
+          <strong id="memory-permission-confirm-title">确认启用完全权限？</strong>
           <p>启用完全权限后，智能体将减少确认步骤，并且可以直接执行更多操作，包括敏感操作、文件修改或外部命令。仅建议在你信任当前任务时使用。</p>
           <div class="memory-permission-confirm-actions">
-            <button type="button" @click="permissionConfirm = false">取消</button>
+            <button type="button" @click="permissionConfirm = false; closeComposerMenus(true)">取消</button>
             <button type="button" class="primary" @click="confirmFullAccess">启用完全权限</button>
           </div>
         </div>
         <div
-          v-if="manjuMenu"
-          class="memory-permission-menu memory-manju-menu"
+          v-if="composerSkillMenu"
+          id="memory-composer-skill-options"
+          class="memory-permission-menu memory-composer-menu memory-skill-menu"
           role="menu"
-          :style="{ left: `${manjuMenu.left}px`, bottom: `${manjuMenu.bottom}px` }"
+          aria-label="创作 Skill"
+          :style="{ left: `${composerSkillMenu.left}px`, bottom: `${composerSkillMenu.bottom}px`, '--composer-menu-bottom': `${composerSkillMenu.bottom}px` }"
+          @keydown="handleComposerMenuKeydown"
         >
+          <div class="memory-composer-menu-heading"><strong>创作 Skill</strong><small>选择创作方式或浏览全部 Skill</small></div>
+          <button v-if="desktopOnlyRuntime" type="button" role="menuitem" @click="chooseComposerSkill('manju')">
+            <span class="memory-skill-glyph"><JcIcon name="movie" /></span>
+            <span class="memory-menu-option-copy"><strong>漫剧制作</strong><small>{{ manjuSelected ? manjuModeLabels[manjuMode] : '自由创作、到提示词、到成片' }}</small></span>
+            <JcIcon name="chevron-right" class="memory-menu-check" />
+          </button>
+          <button v-if="desktopOnlyRuntime" type="button" role="menuitemcheckbox" :aria-checked="shortDramaSelected" @click="chooseComposerSkill('short-drama')">
+            <span class="memory-skill-glyph"><JcIcon name="edit-note" /></span>
+            <span class="memory-menu-option-copy"><strong>短剧改编</strong><small>{{ shortDramaSelected ? '已启用 · 点击退出' : '整理原作，逐集改编剧本' }}</small></span>
+            <JcIcon v-if="shortDramaSelected" name="check" class="memory-menu-check" />
+          </button>
+          <button v-if="desktopOnlyRuntime" type="button" role="menuitemcheckbox" :aria-checked="novelSelected" @click="chooseComposerSkill('novel')">
+            <span class="memory-skill-glyph"><JcIcon name="auto_stories" /></span>
+            <span class="memory-menu-option-copy"><strong>小说创作</strong><small>{{ novelSelected ? '已启用 · 点击退出' : '故事构思、角色与章节写作' }}</small></span>
+            <JcIcon v-if="novelSelected" name="check" class="memory-menu-check" />
+          </button>
+          <button type="button" role="menuitem" @click="chooseComposerSkill('other')">
+            <span class="memory-skill-glyph"><JcIcon name="psychology" /></span>
+            <span class="memory-menu-option-copy"><strong>全部 Skill</strong><small>搜索、分类查看全部可用 Skill</small></span>
+            <JcIcon name="chevron-right" class="memory-menu-check" />
+          </button>
+        </div>
+        <div
+          v-if="manjuMenu"
+          id="memory-manju-options"
+          class="memory-permission-menu memory-composer-menu memory-manju-menu"
+          role="menu"
+          aria-label="漫剧制作 Skill"
+          :style="{ left: `${manjuMenu.left}px`, bottom: `${manjuMenu.bottom}px`, '--composer-menu-bottom': `${manjuMenu.bottom}px` }"
+          @keydown="handleComposerMenuKeydown"
+        >
+          <div class="memory-composer-menu-heading"><strong>漫剧制作 Skill</strong><small>选择当前对话的创作方式</small></div>
           <button v-for="item in manjuModeItems" :key="item.mode" type="button" role="menuitemradio" :aria-checked="manjuSelected && manjuMode === item.mode" @click="chooseManjuMode(item.mode)">
-            <JcIcon :name="manjuSelected && manjuMode === item.mode ? 'check_circle' : 'circle'" />
-            <span>{{ item.label }}<small class="memory-permission-note">{{ item.note }}</small></span>
+            <span class="memory-skill-glyph"><JcIcon name="movie" /></span>
+            <span class="memory-menu-option-copy"><strong>{{ item.label }}</strong><small class="memory-permission-note">{{ item.note }}</small></span>
+            <JcIcon v-if="manjuSelected && manjuMode === item.mode" name="check" class="memory-menu-check" />
           </button>
           <button v-if="manjuSelected" type="button" role="menuitem" @click="chooseManjuMode('off')">
             <JcIcon name="close" />
@@ -5327,21 +5500,27 @@ async function materializeChatAttachments(items: ResolvedDirectAttachment[]): Pr
         </div>
         <div
           v-if="permissionMenu"
-          class="memory-permission-menu"
+          id="memory-permission-options"
+          class="memory-permission-menu memory-composer-menu memory-permission-options"
           role="menu"
-          :style="{ left: `${permissionMenu.left}px`, bottom: `${permissionMenu.bottom}px` }"
+          aria-label="智能体权限"
+          :style="{ left: `${permissionMenu.left}px`, bottom: `${permissionMenu.bottom}px`, '--composer-menu-bottom': `${permissionMenu.bottom}px` }"
+          @keydown="handleComposerMenuKeydown"
         >
+          <div class="memory-composer-menu-heading"><strong>智能体权限</strong><small>选择智能体可以操作的范围</small></div>
           <button
             v-for="option in DEEPSEEK_PERMISSION_TIERS"
             :key="option.tier"
             type="button"
             role="menuitemradio"
             :aria-checked="permissionTier === option.tier"
+            :class="{ selected: permissionTier === option.tier, danger: option.tier === 'danger-full-access' }"
             :disabled="permissionSwitching"
             @click="choosePermission(option.tier)"
           >
-            <JcIcon :name="permissionTier === option.tier ? 'check_circle' : 'circle'" />
-            <span>{{ option.label }}<small class="memory-permission-note">{{ option.note }}</small></span>
+            <JcIcon :name="option.tier === 'danger-full-access' ? 'lock_open' : option.tier === 'read-only' ? 'visibility' : 'shield'" class="memory-menu-option-icon" />
+            <span class="memory-menu-option-copy"><strong>{{ option.label }}</strong><small class="memory-permission-note">{{ option.note }}</small></span>
+            <JcIcon v-if="permissionTier === option.tier" name="check" class="memory-menu-check" />
           </button>
         </div>
         <div
@@ -5464,6 +5643,9 @@ async function materializeChatAttachments(items: ResolvedDirectAttachment[]): Pr
       @captured="handleCapturedFrame"
     />
 
+    <section v-if="chatHidden && !creationOpen && !previewResource" class="memory-workspace-empty">
+      <JcIcon name="dashboard" /><span>从右上角显示画布或对话栏</span>
+    </section>
     <aside v-if="creationMounted" class="memory-creation">
       <CreationPanel ref="creationPanelRef" @preview-resource="previewProjectResource">
         <template #toolbar-actions>
@@ -5474,7 +5656,9 @@ async function materializeChatAttachments(items: ResolvedDirectAttachment[]): Pr
           ><JcIcon name="fit-screen" /></button>
           <button
             class="memory-creation-action"
-            title="收起创作面板"
+            title="隐藏画布"
+            aria-label="隐藏画布"
+            :disabled="creationClosing"
             @click="closeCreationHost"
           ><JcIcon name="close" /></button>
         </template>
@@ -5582,13 +5766,19 @@ async function materializeChatAttachments(items: ResolvedDirectAttachment[]): Pr
 
 <style scoped>
 .memory-workbench { --memory-header-height: 52px; --memory-model-picker-width: min(220px, 28vw); position: relative; display: grid; grid-template-columns: var(--memory-tree-width, 280px) minmax(0, 1fr); width: 100vw; height: 100dvh; overflow: hidden; background: var(--jc-surface); color: var(--ink1); font-size: var(--font-base); }
-.memory-workbench.desktop-runtime { padding-top: 28px; box-sizing: border-box; }
-.memory-window-actions { position: absolute; z-index: 90; top: 0; right: 10px; display: flex; height: 28px; align-items: center; gap: 5px; }
-.memory-window-action { display: inline-flex; height: 25px; align-items: center; justify-content: center; gap: 5px; padding: 0 6px; border: 0; border-radius: 6px; background: transparent; color: var(--ink2); cursor: pointer; font: inherit; font-size: 12px; line-height: 1; }
-.memory-window-action:not(.memory-window-creation-toggle) { width: 28px; flex: 0 0 28px; padding: 0; }
-.memory-window-action:hover:not(:disabled), .memory-window-action[aria-pressed="true"] { background: color-mix(in srgb, var(--olive) 10%, transparent); color: var(--olive); }
-.memory-window-action:disabled { cursor: default; opacity: .45; }
-.memory-window-creation-toggle { box-sizing: border-box; padding: 0 9px; }
+.memory-workbench.desktop-runtime { --memory-workspace-bar-height: 36px; padding-top: var(--memory-workspace-bar-height); box-sizing: border-box; }
+.memory-workspace-bar { position: absolute; z-index: 50; inset: 0 0 auto; display: flex; height: var(--memory-workspace-bar-height); box-sizing: border-box; align-items: center; gap: 12px; padding: 0 14px; border-bottom: 1px solid var(--jc-border); background: var(--paper); }
+.memory-workspace-context { display: flex; flex: 1; align-items: center; gap: 10px; min-width: 0; font-size: 12px; }
+.memory-workspace-label { flex-shrink: 0; color: var(--ink2); font-weight: 600; }
+.memory-workspace-divider { color: var(--ink3); }
+.memory-workspace-project { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--ink2); }
+.memory-canvas-visibility { display: inline-flex; flex-shrink: 0; align-items: center; justify-content: center; gap: 6px; height: 28px; padding: 0 10px; border: 1px solid var(--jc-border); border-radius: 7px; background: var(--paper); color: var(--ink2); font: inherit; font-size: 12px; cursor: pointer; transition: background-color var(--jc-transition-fast), border-color var(--jc-transition-fast); }
+.memory-canvas-visibility > svg { width: 16px; height: 16px; }
+.memory-canvas-visibility:hover:not(:disabled) { border-color: var(--olive); color: var(--olive); }
+.memory-canvas-visibility[aria-pressed="true"] { border-color: color-mix(in srgb, var(--olive) 28%, var(--line)); background: var(--olive-pale); color: var(--olive); }
+.memory-canvas-visibility:focus-visible { outline: 2px solid var(--jc-focus-ring); outline-offset: 2px; }
+.memory-canvas-visibility:disabled { opacity: .5; cursor: wait; }
+.memory-workspace-settings { width: 28px; height: 28px; padding: 0; border: 0; background: transparent; color: var(--ink2); }
 .memory-workbench.desktop-runtime .memory-model-picker { width: var(--memory-model-picker-width); max-width: var(--memory-model-picker-width); }
 .memory-workbench.desktop-runtime .memory-model-trigger { width: 100%; box-sizing: border-box; }
 .memory-scene-recorder { position: fixed; top: 0; left: -10000px; width: 640px; height: 640px; pointer-events: none; }
@@ -5633,10 +5823,14 @@ async function materializeChatAttachments(items: ResolvedDirectAttachment[]): Pr
    模型名短且必须可读，一旦被挤就只剩「gp…」（用户 2026-10-03 截图）。封顶用确定长度。 */
 .memory-workbench:is(.preview-open, .creation-open) .memory-conversation-picker, .memory-workbench:is(.preview-open, .creation-open) .memory-model-picker { max-width: 220px; }
 .memory-workbench.creation-focused { display: block; padding-top: 0; }
-.memory-workbench.desktop-runtime.creation-focused { padding-top: 28px; }
+.memory-workbench.desktop-runtime.creation-focused { padding-top: var(--memory-workspace-bar-height); }
 .memory-workbench.creation-focused .memory-tree, .memory-workbench.creation-focused .memory-main { display: none; }
+.memory-workbench.chat-hidden:not(.creation-focused) { grid-template-columns: var(--memory-tree-width, 280px) minmax(0, 1fr); }
+.memory-workbench.chat-hidden.tree-closed:not(.creation-focused) { grid-template-columns: 0 minmax(0, 1fr); }
+.memory-workspace-empty { grid-column: 2; grid-row: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 12px; color: var(--ink3); font-size: 13px; }
+.memory-workspace-empty > svg { width: 32px; height: 32px; opacity: .5; }
 .memory-tree-resizer { position: absolute; z-index: 40; top: 0; bottom: 0; left: calc(var(--memory-tree-width, 280px) - 4px); width: 8px; cursor: col-resize; touch-action: none; }
-.memory-workbench.desktop-runtime .memory-tree-resizer { top: 28px; }
+.memory-workbench.desktop-runtime .memory-tree-resizer { top: var(--memory-workspace-bar-height); }
 .memory-tree-resizer::after { content: ''; position: absolute; top: 0; bottom: 0; left: 3px; width: 2px; background: transparent; }
 .memory-tree-resizer:hover::after, .memory-tree-resizer:focus-visible::after { background: var(--olive); }
 .memory-tree-resizer:focus-visible { outline: 0; }
@@ -5650,7 +5844,7 @@ async function materializeChatAttachments(items: ResolvedDirectAttachment[]): Pr
 .memory-topbar-actions > .memory-account-settings:hover { background: var(--surface-alt); }
 .memory-topbar .new-conversation-button, .memory-topbar .icon-button, .memory-model-trigger, .memory-conversation-trigger { height: 34px; box-sizing: border-box; border-radius: 8px; }
 .memory-creation-toggle { display: inline-flex; align-items: center; gap: 6px; height: 34px; flex: 0 0 auto; padding: 0 9px; border: 1px solid transparent; border-radius: 8px; background: transparent; color: var(--ink2); cursor: pointer; font: inherit; font-size: 12px; white-space: nowrap; }
-.memory-creation-toggle > svg, .memory-window-creation-toggle > svg { width: 20px; height: 20px; flex: 0 0 20px; }
+.memory-creation-toggle > svg { width: 20px; height: 20px; flex: 0 0 20px; }
 .memory-creation-toggle:hover:not(:disabled) { background: var(--surface-alt); color: var(--ink1); }
 .memory-creation-toggle:disabled { cursor: default; opacity: .45; }
 .memory-creation-toggle[aria-pressed="true"] { color: var(--olive); background: color-mix(in srgb, var(--olive) 8%, var(--surface)); }
@@ -5780,8 +5974,16 @@ async function materializeChatAttachments(items: ResolvedDirectAttachment[]): Pr
 .memory-command-strip { display: flex; min-width: 0; flex: 1 1 0; align-items: center; gap: 4px; flex-wrap: wrap; overflow: visible; }
 .memory-command-strip::-webkit-scrollbar { display: none; }
 .memory-command-strip > button, .memory-command-more > button { display: inline-flex; height: 28px; flex: 0 0 auto; align-items: center; gap: 4px; padding: 0 7px; border: 1px solid transparent; border-radius: 5px; background: transparent; color: var(--ink2); cursor: pointer; font: inherit; font-size: 12px; white-space: nowrap; }
-.memory-workbench.chat-dock-minimal .memory-command-more > button { width: 30px; justify-content: center; padding: 0; }
-.memory-workbench.chat-dock-minimal .memory-command-more > button > span { display: none; }
+.memory-compact-skills { display: none; }
+.memory-skill-glyph { position: relative; display: inline-flex; width: 22px; height: 22px; flex: 0 0 22px; box-sizing: border-box; align-items: center; justify-content: center; border: 1px solid color-mix(in srgb, var(--olive) 24%, var(--line)); border-radius: 6px; background: color-mix(in srgb, var(--olive) 7%, var(--paper)); color: var(--olive); }
+.memory-skill-glyph > svg { width: 14px; height: 14px; }
+.memory-skill-glyph::after { content: ''; position: absolute; top: -2px; right: -2px; width: 4px; height: 4px; border: 1px solid var(--paper); border-radius: 1px; background: currentColor; transform: rotate(45deg); }
+.memory-command-strip .memory-control-chevron { width: 12px; height: 12px; }
+.memory-command-strip button:focus-visible, .memory-composer-menu button:focus-visible { outline: 2px solid var(--jc-focus-ring); outline-offset: 1px; }
+.memory-compact-skills > button { position: relative; padding: 0; width: 32px; height: 32px; justify-content: center; }
+.memory-compact-skills > button.active { background: var(--olive-pale); color: var(--olive); }
+.memory-skill-selected-dot { position: absolute; right: 0; bottom: 0; width: 5px; height: 5px; border: 2px solid var(--paper); border-radius: 50%; background: var(--olive); }
+.memory-compact-skills > button.auto .memory-skill-glyph, .memory-command-strip > .memory-manju-button.auto .memory-skill-glyph { color: var(--jc-error); border-color: color-mix(in srgb, var(--jc-error) 35%, var(--line)); background: color-mix(in srgb, var(--jc-error) 8%, var(--paper)); }
 .memory-action-row > .icon-button { width: 36px; height: 36px; flex: 0 0 36px; border: 0; background: transparent; }
 .memory-action-row > .icon-button:hover { background: var(--surface); }
 /* 芯片提示用 fixed 定位，避开祖先容器裁剪；颜色走主题。 */
@@ -5808,11 +6010,43 @@ async function materializeChatAttachments(items: ResolvedDirectAttachment[]): Pr
 .memory-permission-confirm-actions button.primary { border-color: transparent; background: var(--olive); color: #fff; }
 .memory-permission-menu button { display: flex; width: 100%; align-items: flex-start; gap: 8px; padding: 8px; border: 0; border-radius: 5px; background: transparent; color: var(--ink1); cursor: pointer; font: inherit; font-size: 12px; text-align: left; }
 .memory-permission-menu button:hover { background: color-mix(in srgb, var(--olive) 12%, transparent); color: var(--olive); }
-.memory-input-row { position: relative; display: grid; min-width: 0; gap: 12px; padding: 8px 14px 12px; }
+.memory-composer-menu { box-sizing: border-box; width: min(320px, calc(100vw - 24px)); max-height: calc(100dvh - var(--composer-menu-bottom, 80px) - 12px); overflow-y: auto; overscroll-behavior: contain; padding: 6px; border-radius: 12px; box-shadow: var(--jc-shadow-lg); }
+.memory-composer-menu-heading { display: grid; gap: 4px; padding: 9px 10px 11px; margin-bottom: 4px; border-bottom: 1px solid var(--line); }
+.memory-composer-menu-heading strong { color: var(--ink1); font-size: 13px; font-weight: 600; }
+.memory-composer-menu-heading small { color: var(--ink3); font-size: 12px; }
+.memory-composer-menu button { align-items: center; gap: 10px; min-height: 52px; padding: 9px 10px; border-radius: 8px; }
+.memory-composer-menu button.selected, .memory-composer-menu button[aria-checked="true"] { background: var(--surface-alt); }
+.memory-menu-option-copy { display: grid; flex: 1; min-width: 0; gap: 3px; }
+.memory-menu-option-copy strong { font-size: 13px; font-weight: 500; }
+.memory-menu-option-copy small { margin: 0; color: var(--ink3); font-size: 12px; line-height: 1.5; white-space: normal; overflow-wrap: anywhere; }
+.memory-menu-option-icon { width: 20px; height: 20px; flex: 0 0 20px; color: var(--ink2); }
+.memory-composer-menu button.danger > .memory-menu-option-icon { color: var(--jc-error); }
+.memory-menu-check { width: 16px; height: 16px; flex: 0 0 16px; margin-left: auto; color: var(--olive); }
+.memory-input-row { container: composer-input / inline-size; position: relative; display: grid; min-width: 0; gap: 12px; padding: 8px 14px 12px; }
+@container composer-input (max-width: 520px) {
+  .memory-action-row { align-items: center; gap: 6px; }
+  .memory-command-strip { flex-wrap: nowrap; gap: 6px; }
+  .memory-command-strip > button { display: none; }
+  .memory-compact-skills { display: block; }
+  .memory-command-more > .memory-permission-trigger { width: 32px; height: 32px; padding: 0; justify-content: center; }
+  .memory-permission-trigger .memory-command-label, .memory-permission-trigger .memory-control-chevron { display: none; }
+  .memory-permission-trigger > svg { width: 18px; height: 18px; }
+  .memory-action-row > .icon-button { width: 30px; height: 32px; flex-basis: 30px; }
+  .memory-editing-cancel { width: 28px; height: 30px; padding: 0; justify-content: center; }
+  .memory-editing-cancel > span { display: none; }
+}
+@container composer-input (max-width: 240px) {
+  .memory-action-row, .memory-command-strip { gap: 2px; }
+  .memory-action-row > .icon-button { width: 28px; flex-basis: 28px; }
+  .memory-command-more > .memory-permission-trigger, .memory-compact-skills > button { width: 28px; }
+  .memory-action-row > button.send-button, .memory-action-row > .memory-queue-stop { width: 28px; flex-basis: 28px; }
+  .memory-editing-cancel { width: 24px; }
+}
 .memory-input-area { display: flex; min-width: 0; align-items: flex-start; padding: 6px 2px 0; }
 .memory-action-row { display: flex; min-width: 0; align-items: flex-end; gap: 4px; }
 .memory-input-drop-active { border: 1px dashed var(--olive); background: color-mix(in srgb, var(--olive) 8%, var(--paper)); }
 .memory-mention-popover { position: absolute; z-index: 60; right: 10px; bottom: calc(100% + 7px); left: 10px; max-height: min(320px, 42vh); overflow-y: auto; padding: 5px; border: 1px solid var(--line); border-radius: 8px; background: var(--paper); box-shadow: 0 12px 30px rgb(0 0 0 / 16%); }
+.memory-mention-popover.memory-all-skill-picker { position: fixed; z-index: 80; right: auto; width: min(420px, calc(100vw - 24px)); max-height: min(480px, calc(100dvh - var(--skill-picker-bottom, 80px) - 12px)); box-sizing: border-box; padding: 0; overflow: hidden; border-radius: 12px; box-shadow: var(--jc-shadow-lg); }
 .memory-mention-popover > button { display: grid; width: 100%; grid-template-columns: 22px minmax(0, 1fr) auto; align-items: center; gap: 7px; padding: 7px 8px; border: 0; border-radius: 5px; background: transparent; color: var(--ink1); cursor: pointer; font: inherit; text-align: left; }
 .memory-mention-popover > button:hover, .memory-mention-popover > button.active { background: color-mix(in srgb, var(--olive) 14%, transparent); }
 .memory-mention-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -5924,7 +6158,7 @@ async function materializeChatAttachments(items: ResolvedDirectAttachment[]): Pr
 .memory-creation-action { display: grid; width: 28px; height: 28px; flex: 0 0 28px; padding: 0; place-items: center; border: 1px solid var(--line); border-radius: 6px; background: var(--paper); color: var(--ink2); cursor: pointer; }
 .memory-creation-action:hover { border-color: var(--olive); color: var(--olive-dark); }
 .memory-workbench.creation-focused .memory-creation { width: 100vw; height: 100dvh; border-left: 0; }
-.memory-workbench.desktop-runtime.creation-focused .memory-creation { height: calc(100dvh - 28px); }
+.memory-workbench.desktop-runtime.creation-focused .memory-creation { height: calc(100dvh - var(--memory-workspace-bar-height)); }
 .memory-preview-header { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: 12px; padding: 0 12px; border-bottom: 1px solid var(--line); }
 .memory-preview-header > strong { min-width: 0; text-align: center; }
 .memory-preview-title { display: flex; flex-direction: column; min-width: 0; }
@@ -5932,6 +6166,12 @@ async function materializeChatAttachments(items: ResolvedDirectAttachment[]): Pr
 .memory-preview-path { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--ink3); font-size: 11px; font-weight: 400; }
 .memory-preview-back { display: flex; height: 34px; align-items: center; gap: 5px; padding: 0 8px; border: 0; background: transparent; color: var(--olive); cursor: pointer; font: inherit; }
 .memory-empty-state { display: grid; min-height: 0; padding: 32px; place-items: center; color: var(--ink3); font-size: calc(var(--font-base) - 1px); }
+.memory-brand-welcome { text-align: center; }
+.memory-brand-welcome > div { display: grid; justify-items: center; gap: 14px; max-width: 420px; }
+.memory-brand-welcome img { border-radius: 21px; box-shadow: 0 12px 36px rgba(120, 64, 36, .18); }
+.memory-brand-welcome h1 { margin: 8px 0 0; color: var(--ink); font-size: 30px; font-weight: 750; letter-spacing: .08em; }
+.memory-brand-welcome p { margin: 0; line-height: 1.7; }
+.memory-brand-welcome .memory-brand-tagline { margin-bottom: 8px; color: var(--ink2); font-size: 15px; }
 .memory-onboarding { display: grid; min-height: 0; padding: 32px; place-items: center; text-align: center; }
 .memory-onboarding > div { display: grid; justify-items: center; gap: 12px; }
 .memory-onboarding img { width: 72px; height: 72px; }
@@ -5962,7 +6202,7 @@ async function materializeChatAttachments(items: ResolvedDirectAttachment[]): Pr
   .memory-creation { position: fixed; z-index: 45; inset: 0; width: 100vw; height: 100dvh; border-left: 0; }
 }
 @media (min-width: 761px) and (max-width: 939px) {
-  .memory-workbench.desktop-runtime .memory-creation { top: 28px; height: calc(100dvh - 28px); }
+  .memory-workbench.desktop-runtime .memory-creation, .memory-workbench.desktop-runtime .memory-preview { top: var(--memory-workspace-bar-height); height: calc(100dvh - var(--memory-workspace-bar-height)); }
 }
 @media (max-width: 760px) {
   .memory-workbench, .memory-workbench.desktop-runtime { display: block; height: 100dvh; padding-top: env(safe-area-inset-top, 0); box-sizing: border-box; }
@@ -5977,7 +6217,6 @@ async function materializeChatAttachments(items: ResolvedDirectAttachment[]): Pr
   .memory-model-picker { max-width: 100px; }
   .memory-workbench.desktop-runtime .memory-model-picker { width: auto; max-width: 100px; }
   .memory-workbench.desktop-runtime .memory-model-trigger { width: 100%; }
-  .memory-workbench.desktop-runtime .memory-window-creation-toggle { width: auto; }
   .memory-model-menu { right: 0; left: auto; }
   .memory-messages { padding: 18px 14px; }
   .memory-message.user { margin-left: 12%; }

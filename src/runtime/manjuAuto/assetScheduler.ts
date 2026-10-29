@@ -6,6 +6,8 @@
  * 重启后据此去重，不依赖内存里的 requestId 表（静态模型重启后会丢）。
  */
 
+import { UNCERTAIN_SUBMISSION } from '../creation/submissionSafety'
+
 export const ASSET_REGISTRY_PATH = '制作流水线/资产注册表.json'
 /** 首次提交 + 2 次重试（2026-10-25 用户确认）。 */
 const MAX_ATTEMPTS = 3
@@ -30,7 +32,7 @@ export interface AssetRegistryEntry {
   kind: AssetKind
   prompt_path: string
   prompt_hash: string
-  status: 'pending' | 'ready' | 'failed' | 'locked' | 'waiting'
+  status: 'pending' | 'ready' | 'failed' | 'locked' | 'waiting' | 'uncertain'
   base?: string
   costume?: string
   attempts: number
@@ -51,8 +53,18 @@ export interface WikiTaskDeps {
   readText(path: string): Promise<string>
   writeText(path: string, content: string): Promise<void>
   exists(path: string): Promise<boolean>
-  /** status 'interrupted'：任务还挂着但 App 里已无人跟进且无法恢复（例如重启前未拿到上游任务号）。 */
-  getTask(taskId: string): Promise<{ status: string; localPath?: string; error?: string } | undefined>
+  /** interrupted / submissionUncertain 表示受理结果不明，不能自动重提。 */
+  getTask(taskId: string): Promise<{ status: string; localPath?: string; error?: string; submissionUncertain?: boolean } | undefined>
+  findTask?(requestId: string): Promise<string | undefined>
+}
+
+export async function registeredTask(entry: { task_id?: string; request_id?: string }, deps: WikiTaskDeps) {
+  if (!entry.task_id && entry.request_id && deps.findTask) entry.task_id = await deps.findTask(entry.request_id)
+  return entry.task_id ? deps.getTask(entry.task_id) : undefined
+}
+
+export function unresolvedSubmission(task: Awaited<ReturnType<WikiTaskDeps['getTask']>>) {
+  return !task || task.status === 'interrupted' || task.submissionUncertain === true
 }
 
 export interface AssetSchedulerDeps extends WikiTaskDeps {
@@ -90,18 +102,20 @@ async function submit(wikiRoot: string, registry: Registry, id: string, entry: A
   entry.submits = (entry.submits ?? entry.attempts - 1) + 1
   const requestId = `manju:${id}:${entry.prompt_hash.slice(0, 16)}:${entry.submits}`
   const images = entry.kind === 'look' ? [entry.base!, entry.costume!].map(dep => registry.assets[dep]?.image_path!) : undefined
-  entry.task_id = await deps.submitImage({ requestId, prompt: promptBody(await deps.readText(entry.prompt_path)), kind: entry.kind, ...(images && { images }) })
   entry.request_id = requestId
   entry.status = 'pending'
   delete entry.error
-  // 每提交一个就落盘：崩溃最多丢失正在提交的那一个。
+  delete entry.task_id
+  // 先保存请求号，再提交；响应丢失时按原请求号找回本地任务。
+  await saveRegistry(wikiRoot, registry, deps)
+  entry.task_id = await deps.submitImage({ requestId, prompt: promptBody(await deps.readText(entry.prompt_path)), kind: entry.kind, ...(images && { images }) })
   await saveRegistry(wikiRoot, registry, deps)
 }
 
 /** 未登记、提示词改了、或上次运行最终失败的资产需要提交；失败项每次新运行重新给一轮重试。 */
 function needsSubmit(registry: Registry, id: string, hash: string) {
   const current = registry.assets[id]
-  return !current || (current.status !== 'locked' && (current.prompt_hash !== hash || current.status === 'failed'))
+  return !current || (!['locked', 'uncertain'].includes(current.status) && (current.prompt_hash !== hash || current.status === 'failed'))
 }
 
 /** 本集需要新生成的资产（预算估算用），与 submitEpisodeAssets 的判断一致。 */
@@ -114,6 +128,11 @@ export async function assetsToSubmit(wikiRoot: string, checkpoint: EpisodeCheckp
 export async function submitEpisodeAssets(wikiRoot: string, checkpoint: EpisodeCheckpoint, deps: AssetSchedulerDeps) {
   const registry = await loadRegistry(wikiRoot, deps)
   for (const [id, asset] of Object.entries(checkpoint.assets || {})) {
+    const prior = registry.assets[id]
+    if (prior?.status === 'failed' && unresolvedSubmission(await registeredTask(prior, deps))) {
+      Object.assign(prior, { status: 'uncertain', error: UNCERTAIN_SUBMISSION })
+      await saveRegistry(wikiRoot, registry, deps)
+    }
     if (!needsSubmit(registry, id, asset.prompt_hash)) continue
     const previous = registry.assets[id]
     const entry: AssetRegistryEntry = { ...asset, status: 'pending', attempts: 1, episode: checkpoint.episode_number,
@@ -150,6 +169,14 @@ export async function awaitEpisodeAssets(
       const entry = registry.assets[id]
       if (entry.status === 'locked' || entry.status === 'ready') continue
       if (entry.status === 'failed') { failed.push(id); continue }
+      if (entry.status === 'uncertain') {
+        const recovered = await registeredTask(entry, deps)
+        if (recovered?.status === 'success' && recovered.localPath) {
+          entry.status = 'ready'
+          entry.image_path = recovered.localPath
+        } else failed.push(id)
+        continue
+      }
       if (entry.status === 'waiting') {
         const parts = [entry.base!, entry.costume!].map(dep => registry.assets[dep])
         if (parts.some(part => !part || part.status === 'failed')) {
@@ -164,17 +191,16 @@ export async function awaitEpisodeAssets(
         }
         continue
       }
-      const task = entry.task_id ? await deps.getTask(entry.task_id) : undefined
-      if (task?.status === 'success' && task.localPath) {
+      const task = await registeredTask(entry, deps)
+      if (unresolvedSubmission(task)) {
+        Object.assign(entry, { status: 'uncertain', error: UNCERTAIN_SUBMISSION })
+        failed.push(id)
+      } else if (task?.status === 'success' && task.localPath) {
         entry.status = 'ready'
         entry.image_path = task.localPath
       } else if (!task || task.status === 'failed' || task.status === 'cancelled' || task.status === 'interrupted') {
         const error = task?.error || '任务记录丢失'
-        if (task?.status === 'interrupted') {
-          // App 重启时尚未拿到上游任务、无人跟进：立即重提，不计入失败次数。
-          await submit(wikiRoot, registry, id, entry, deps)
-          pending.push(id)
-        } else if (task && RATE_LIMIT.test(error) && (entry.transient ?? 0) < MAX_TRANSIENT) {
+        if (task && RATE_LIMIT.test(error) && (entry.transient ?? 0) < MAX_TRANSIENT) {
           if (entry.retry_at === undefined) entry.retry_at = now() + RATE_LIMIT_BACKOFF_MS
           else if (now() >= entry.retry_at) {
             delete entry.retry_at
@@ -197,8 +223,8 @@ export async function awaitEpisodeAssets(
     await saveRegistry(wikiRoot, registry, deps)
     const images = Object.fromEntries(ids.filter(id => registry.assets[id].image_path).map(id => [id, registry.assets[id].image_path!]))
     if (!pending.length) {
-      if (failed.length) return { status: 'failed', images, failed, pending, review: [] }
       const review = options.review ? ids.filter(id => registry.assets[id].status !== 'locked') : []
+      if (failed.length && !review.length) return { status: 'failed', images, failed, pending, review: [] }
       return { status: review.length ? 'awaiting_review' : 'ready', images, failed, pending, review }
     }
     if (now() >= deadline) return { status: 'timeout', images, failed, pending, review: [] }
@@ -212,6 +238,10 @@ export async function awaitEpisodeAssets(
 /** 用户审过（或手动换过）的图锁定，之后永不自动重生成。 */
 export async function lockAssets(wikiRoot: string, ids: string[], deps: AssetSchedulerDeps) {
   const registry = await loadRegistry(wikiRoot, deps)
+  for (const id of ids) {
+    const entry = registry.assets[id]
+    if (!entry?.image_path || !['ready', 'locked'].includes(entry.status)) throw new Error(`资产未就绪，不能确认：${id}`)
+  }
   for (const id of ids) if (registry.assets[id]) registry.assets[id].status = 'locked'
   await saveRegistry(wikiRoot, registry, deps)
 }

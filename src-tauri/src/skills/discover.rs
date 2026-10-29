@@ -3024,21 +3024,6 @@ mod tests {
         .unwrap();
 
         std::fs::create_dir_all(vault_dir.join(".claude/skills")).unwrap();
-        #[cfg(unix)]
-        {
-            std::os::unix::fs::symlink(
-                &source_skill_dir,
-                vault_dir
-                    .join(".claude/skills")
-                    .join(CROSS_AREA_FIXTURE_SKILL_DIR_NAME),
-            )
-            .unwrap();
-            std::os::unix::fs::symlink(
-                vault_dir.join(".agents/skills/missing-target"),
-                vault_dir.join(".claude/skills/broken-money-researcher"),
-            )
-            .unwrap();
-        }
 
         let ordinary_project = obsidian_parent.join("ordinary-project");
         let ordinary_skill_dir = create_skill(

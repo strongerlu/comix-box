@@ -8,7 +8,7 @@ test('normalizes unsafe export filenames while keeping extension', () => {
 })
 
 test('adds fallback extension when missing', () => {
-  assert.equal(normalizeExportFilename('韭菜盒子导出', 'pdf'), '韭菜盒子导出.pdf')
+  assert.equal(normalizeExportFilename('COMIC-BOX导出', 'pdf'), 'COMIC-BOX导出.pdf')
 })
 
 test('builds save dialog filter from file extension', () => {

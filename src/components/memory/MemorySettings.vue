@@ -22,11 +22,9 @@ import {
 } from '@/services/newApiClient'
 import { projectTextSync } from '@/services/projectTextSync'
 import { confirmAction } from '@/utils/confirmAction'
-import DesktopUpdateSettings from './DesktopUpdateSettings.vue'
-import { desktopUpdateStatus } from '@/services/desktopUpdater'
 
 const props = defineProps<{ owner?: string; projectName?: string }>()
-type SettingsTab = 'account' | 'models' | 'skills' | 'mcp' | 'remote' | 'theme' | 'screenshot' | 'update'
+type SettingsTab = 'account' | 'models' | 'skills' | 'mcp' | 'remote' | 'theme' | 'screenshot'
 
 const tab = ref<SettingsTab>('account')
 const apiKey = ref('')
@@ -64,26 +62,10 @@ const appVersion = __APP_VERSION__
 const { theme } = useTheme()
 const textModels = computed(() => agentStore.textModels.map(model => ({ id: model.id, label: model.label })))
 const themeOptions = [
-  { key: 'white', label: '白色' },
-  { key: 'light', label: '浅色' },
-  { key: 'dark', label: '黑夜' },
-  { key: 'green', label: '柔绿' },
-  { key: 'nord', label: '冷灰' },
-  { key: 'dracula', label: '暗紫' },
+  { key: 'light', label: '暖昼' },
+  { key: 'dark', label: '曜石' },
+  { key: 'aurora', label: '极光' },
 ] as const
-const fontSizes = [
-  { value: 14, label: '标准' },
-  { value: 16, label: '大字' },
-  { value: 18, label: '特大' },
-  { value: 30, label: '超级大' },
-] as const
-const fontSize = ref(Number(localStorage.getItem('jcFontSize')) || 14)
-
-function setFontSize(value: number) {
-  fontSize.value = value
-  localStorage.setItem('jcFontSize', String(value))
-  document.documentElement.style.setProperty('--font-base', `${value}px`)
-}
 
 onMounted(async () => {
   if (desktopRuntime) {
@@ -255,10 +237,15 @@ async function saveKey() {
     status.value = '请填写 API Key'
     return
   }
-  await setApiKey(key)
-  await agentStore.fetchModels().catch(() => {})
-  saved.value = true
-  status.value = '已保存'
+  try {
+    await setApiKey(key)
+    await agentStore.fetchModels().catch(() => {})
+    saved.value = true
+    status.value = '已保存'
+  } catch (error) {
+    saved.value = false
+    status.value = `保存失败：${error instanceof Error ? error.message : String(error)}`
+  }
 }
 </script>
 
@@ -284,10 +271,8 @@ async function saveKey() {
       <button :class="{ active: tab === 'theme' }" @click="tab = 'theme'">
         <JcIcon name="palette" />主题
       </button>
-      <button v-if="desktopRuntime" :class="{ active: tab === 'update' }" @click="tab = 'update'">更新<span v-if="desktopUpdateStatus.version"> ●</span></button>
     </nav>
     <div class="memory-settings-body">
-      <DesktopUpdateSettings v-if="desktopRuntime && tab === 'update'" />
       <ScreenshotSettings v-if="screenshotRuntime && tab === 'screenshot'" />
       <div v-if="tab === 'account' || tab === 'models'" class="memory-account">
         <div v-if="tab === 'account'" class="memory-account-identity">
@@ -423,22 +408,9 @@ async function saveKey() {
             {{ option.label }}
           </button>
         </div>
-        <section class="memory-font-setting">
-          <strong>全局字号</strong>
-          <div class="memory-font-options" aria-label="全局字号">
-            <button
-              v-for="option in fontSizes"
-              :key="option.value"
-              :class="{ active: fontSize === option.value }"
-              @click="setFontSize(option.value)"
-            >
-              {{ option.label }} {{ option.value }}
-            </button>
-          </div>
-        </section>
       </div>
     </div>
-    <footer class="memory-settings-version">版本 {{ desktopRuntime ? desktopUpdateStatus.currentVersion || appVersion : appVersion }}<button v-if="desktopRuntime" @click="tab = 'update'">{{ desktopUpdateStatus.version ? '有新版本' : '检查更新' }}</button></footer>
+    <footer class="memory-settings-version">版本 {{ appVersion }}</footer>
   </div>
 </template>
 
@@ -456,9 +428,6 @@ async function saveKey() {
 .memory-settings-desktop .memory-settings-body { grid-column: 1; grid-row: 1; min-width: 0; padding: 16px; }
 .memory-settings-version { padding: 8px 12px; border-top: 1px solid var(--line); color: var(--ink3); font-size: 12px; text-align: center; }
 .memory-settings-desktop .memory-settings-version { grid-column: 1 / -1; grid-row: 2; }
-.memory-settings-version button { margin-left: 4px; padding: 2px 6px; border: 1px solid var(--line); border-radius: 6px; background: var(--surface); color: var(--ink1); font: inherit; cursor: pointer; }
-.memory-settings-version button:hover { border-color: var(--olive); background: var(--surface-alt); }
-.memory-settings-version button:focus-visible { outline: 2px solid var(--olive); outline-offset: 2px; }
 .memory-account { display: grid; min-width: 0; gap: 12px; }
 .memory-mobile-account-actions { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
 .memory-mobile-logout, .memory-mobile-delete { display: flex; min-height: 40px; align-items: center; justify-content: center; gap: 6px; border: 1px solid var(--line); border-radius: 6px; background: var(--surface); color: var(--ink2); font: inherit; }
@@ -500,21 +469,14 @@ async function saveKey() {
 .memory-service-switch input:focus-visible { outline: 2px solid var(--jc-focus-ring); outline-offset: 3px; }
 @media (prefers-reduced-motion: reduce) { .memory-service-switch input, .memory-service-switch input::before { transition: none; } }
 .memory-appearance { display: grid; gap: 20px; }
-.memory-theme-options { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+.memory-theme-options { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
 .memory-theme-options button { display: flex; align-items: center; gap: 9px; min-height: 42px; padding: 8px 10px; border: 1px solid var(--line); border-radius: 6px; background: var(--paper); color: var(--ink1); cursor: pointer; }
 .memory-theme-options button.active { border-color: var(--olive); box-shadow: inset 0 0 0 1px var(--olive); }
 .memory-theme-swatch { width: 18px; height: 18px; flex: 0 0 18px; border: 1px solid rgb(0 0 0 / 16%); border-radius: 50%; }
 .memory-theme-swatch.white { background: #fff; }
-.memory-theme-swatch.light { background: #f7f8f5; }
-.memory-theme-swatch.dark { background: #201b14; }
-.memory-theme-swatch.green { background: #eaf0e8; }
-.memory-theme-swatch.nord { background: #eceff4; }
-.memory-theme-swatch.dracula { background: #282a36; }
-.memory-font-setting { display: grid; gap: 8px; }
-.memory-font-setting > strong { font-size: var(--font-base); }
-.memory-font-options { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 6px; }
-.memory-font-options button { min-width: 0; min-height: 38px; padding: 6px 4px; border: 1px solid var(--line); border-radius: 6px; background: var(--paper); color: var(--ink1); font: inherit; cursor: pointer; }
-.memory-font-options button.active { border-color: var(--olive); background: var(--olive-pale); }
+.memory-theme-swatch.light { background: #f4f2ed; }
+.memory-theme-swatch.dark { background: #090d12; }
+.memory-theme-swatch.aurora { background: #060b14; }
 @media (max-width: 560px) {
   .memory-settings-desktop { grid-template-columns: minmax(0, 1fr) 112px; }
   .memory-settings-desktop .memory-settings-tabs { padding: 8px 6px; }

@@ -2,7 +2,26 @@ import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { test } from 'node:test'
 
-import { createRustHttpResponse, isLocalLoopbackUrl, isLocalOllamaUrl, normalizeRustHttpRequest, serializeRustHttpBody, shouldUseRustHttpBridge } from '../httpClient'
+import { createRustHttpResponse, isLocalLoopbackUrl, isLocalOllamaUrl, normalizeRustHttpRequest, safeFetch, serializeRustHttpBody, shouldUseRustHttpBridge } from '../httpClient'
+
+test('desktop non-streaming HTTP observes abort even when the native invocation has not returned', async () => {
+  const previousWindow = (globalThis as any).window
+  const controller = new AbortController()
+  let entered!: () => void
+  const started = new Promise<void>(resolve => { entered = resolve })
+  let finish!: (value: unknown) => void
+  ;(globalThis as any).window = { __TAURI_INTERNALS__: { invoke: () => {
+    entered()
+    return new Promise(resolve => { finish = resolve })
+  } } }
+  try {
+    const response = safeFetch('https://example.com/v1/images/generations', { signal: controller.signal })
+    await started
+    controller.abort()
+    finish({ status: 200, headers: {}, body: '{}' })
+    await assert.rejects(response, error => error instanceof Error && error.name === 'AbortError')
+  } finally { (globalThis as any).window = previousWindow }
+})
 
 test('constructs bodyless responses for no-content HTTP statuses', async () => {
   for (const status of [204, 205, 304]) {

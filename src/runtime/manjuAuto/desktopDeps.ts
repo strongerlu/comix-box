@@ -1,5 +1,6 @@
-import { runCreationOperation } from '@/runtime/creation/creationMcpBridge'
+import { findCreationTaskByRequest, runCreationOperation } from '@/runtime/creation/creationMcpBridge'
 import { useMediaTaskStore } from '@/stores/mediaTaskStore'
+import { invoke } from '@tauri-apps/api/core'
 import { createRuntimeProjectFileService, createSkillDraftFiles } from '@/services/projectFileService'
 import type { AssetSchedulerDeps, WikiTaskDeps } from './assetScheduler'
 import { buildMediaParams, profileFromCapability, profileFromSpec, type MediaParamProfile } from './mediaParams'
@@ -12,12 +13,20 @@ function wikiTaskDeps(owner: string): WikiTaskDeps {
   return {
     readText: path => files.readText(path),
     async writeText(path, content) { await files.writeText(path, content) },
-    async exists(path) { return (await service.list(owner)).some(resource => !resource.isDirectory && String(resource.path) === path) },
+    async exists(path) {
+      const normalized = path.replace(/\\/g, '/')
+      if (/^(?:[A-Za-z]:\/|\/)/.test(normalized)) {
+        const split = normalized.lastIndexOf('/')
+        return invoke<boolean>('dev_file_exists', { input: { root: normalized.slice(0, split), relativePath: normalized.slice(split + 1) } })
+      }
+      return invoke<boolean>('dev_file_exists', { input: { root: owner, relativePath: normalized } })
+    },
+    findTask: requestId => findCreationTaskByRequest(owner, requestId),
     async getTask(taskId) {
       try {
-        const task = await runCreationOperation('get_creation_task', { taskId }) as { status: string; localPath?: string; error?: string }
+        const task = await runCreationOperation('get_creation_task', { taskId }) as { status: string; localPath?: string; error?: string; submissionUncertain?: boolean }
         if (task.status !== 'pending' && task.status !== 'running') return task
-        // App 重启后：有上游任务号的继续查结果（不重提、不多花钱）；拿不到上游任务号的判为中断，由调度器重提。
+        // App 重启后只恢复查询；拿不到受理号时不能据此断定未提交。
         const store = useMediaTaskStore()
         if (store.isTaskActive(taskId)) return task
         const raw = store.getTask(taskId)
@@ -26,7 +35,7 @@ function wikiTaskDeps(owner: string): WikiTaskDeps {
           void store.refreshTaskResult(taskId).catch(() => {})
           return task
         }
-        return { status: 'interrupted', error: '任务中断：App 重启时尚未拿到上游任务号，需要重新提交' }
+        return { status: 'interrupted', submissionUncertain: true, error: '提交结果待核实：没有上游任务号，已停止自动重提' }
       } catch (error) {
         if (error instanceof Error && error.message === '未找到创作任务') return undefined
         throw error
@@ -59,10 +68,25 @@ export function createDesktopAssetDeps(owner: string, config: { imageModelId: st
   }
 }
 
-export function createDesktopVideoDeps(owner: string, config: { videoModelId: string; ratio: string; resolution?: string }, profile: MediaParamProfile): VideoSchedulerDeps {
-  const params = (input: { prompt: string; images: string[]; durationSeconds: number }) => buildMediaParams(profile, { ...input, ratio: config.ratio, resolution: config.resolution })
+export function createDesktopVideoDeps(owner: string, config: { videoModelId: string; ratio: string; resolution?: string; continuationModelId?: string }, profile: MediaParamProfile, continuationProfile?: MediaParamProfile): VideoSchedulerDeps {
+  const params = (input: { prompt: string; images: string[]; durationSeconds: number; firstFrame?: string }) => buildMediaParams(profile, { ...input, ratio: config.ratio, resolution: config.resolution })
   return {
     ...wikiTaskDeps(owner),
+    ...(config.continuationModelId && continuationProfile && { continuation: {
+      modelId: config.continuationModelId, exclusive: Boolean(continuationProfile.firstFrame?.exclusive),
+      checkVideo: (input: {prompt: string; images: string[]; durationSeconds: number; firstFrame?: string}) => { buildMediaParams(continuationProfile, { ...input, ratio: config.ratio }) },
+      submitVideo: ({ requestId, ...input }: Parameters<VideoSchedulerDeps['submitVideo']>[0]) => submit(owner, config.continuationModelId!, requestId, buildMediaParams(continuationProfile, { ...input, ratio: config.ratio })),
+    } }),
+    async waitPrevious(check) {
+      const deadline = Date.now() + 60 * 60_000
+      while (!await check()) {
+        if (Date.now() >= deadline) throw new Error('等待上一段超时；任务保留，续做查询原任务')
+        await new Promise(resolve => setTimeout(resolve, 2000))
+      }
+    },
+    modelId: config.videoModelId,
+    canUseFirstFrame: count => Boolean(profile.firstFrame && (!profile.firstFrame.exclusive || count === 0)),
+    extractTailFrame: (video, endSeconds) => invoke<string>('media_review_video', { input: { inputPath: video, action: 'tail_frame', endSeconds } }),
     checkVideo: input => { params(input) },
     // 依次提交：等上一段参考图上传完、拿到上游任务号（或已结束）再交下一段，最多等 10 分钟。
     async waitSubmitted(taskId) {

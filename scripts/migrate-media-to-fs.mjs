@@ -122,7 +122,7 @@ async function main() {
   const dryRun = args.includes('--dry-run')
   const dbPath = args.find((_, i) => args[i - 1] === '--db') || DEFAULT_DB_PATH
 
-  console.log('🥬 韭菜盒子 — 历史媒体资产迁移工具')
+  console.log('🥬 COMIC-BOX — 历史媒体资产迁移工具')
   console.log(`   数据库: ${dbPath}`)
   console.log(`   媒体目录: ${MEDIA_ROOT}`)
   if (dryRun) console.log('   ⚠️  DRY-RUN 模式：只统计，不写入\n')

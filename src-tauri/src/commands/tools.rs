@@ -3,6 +3,17 @@ use std::env;
 use std::path::{Path, PathBuf};
 use tauri;
 
+/// Media and service subprocesses are background work; suppress Windows console windows.
+pub(crate) fn configure_background_command(command: &mut std::process::Command) {
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x08000000;
+        command.creation_flags(CREATE_NO_WINDOW);
+    }
+
+}
+
 #[tauri::command]
 pub fn check_whisper_available(app: tauri::AppHandle) -> Result<bool, String> {
     let bin = match resolve_app_media_binary(&app, "whisper-cli") {
@@ -15,8 +26,9 @@ pub fn check_whisper_available(app: tauri::AppHandle) -> Result<bool, String> {
         return Ok(false);
     }
     // 尝试运行 --version（超时 5s）
-    let output = std::process::Command::new(&bin)
-        .arg("--version")
+    let mut command = std::process::Command::new(&bin);
+    configure_background_command(&mut command);
+    let output = command.arg("--version")
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
         .output()
@@ -99,7 +111,7 @@ pub(crate) fn resolve_local_binary(program: &str) -> PathBuf {
     }
 
     let candidate = resolve_home_dir()
-        .join(".jiucaihezi")
+        .join(".comic-box")
         .join("tools")
         .join("bin")
         .join(program);
@@ -137,14 +149,7 @@ pub(crate) fn resolve_local_binary(program: &str) -> PathBuf {
         if candidate.exists() { return candidate; }
     }
 
-    // Unix 平台补充查找（Windows 上 PATH 已足够）
-    #[cfg(not(windows))]
-    for dir in ["/opt/homebrew/bin", "/usr/local/bin", "/usr/bin", "/bin"] {
-        let candidate = PathBuf::from(dir).join(program);
-        if candidate.exists() {
-            return candidate;
-        }
-    }
+
 
     PathBuf::from(program)
 }
@@ -161,11 +166,6 @@ fn find_in_path(program: &str, dirs: impl IntoIterator<Item = PathBuf>) -> Optio
         }
     }
     None
-}
-
-#[cfg(not(windows))]
-fn path_candidate_names(program: &str) -> Vec<String> {
-    vec![program.to_string()]
 }
 
 /// Windows 的 CreateProcess 不能执行无扩展名文件：Node.js 安装目录里 `npx` 是 Unix shell
@@ -194,39 +194,20 @@ fn ensure_binary_executable(path: &Path) {
     #[cfg(not(unix))]
     let _ = path;
 
-    #[cfg(target_os = "macos")]
-    {
-        let _ = std::process::Command::new("xattr")
-            .args(["-dr", "com.apple.quarantine"])
-            .arg(path)
-            .output();
-    }
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        if let Ok(meta) = std::fs::metadata(path) {
-            let mode = meta.permissions().mode();
-            if mode & 0o111 == 0 {
-                let mut perms = meta.permissions();
-                perms.set_mode(mode | 0o755);
-                let _ = std::fs::set_permissions(path, perms);
-            }
-        }
-    }
 }
 
 pub(crate) fn resolve_app_media_binary(
     _app: &tauri::AppHandle,
     program: &str,
 ) -> Result<PathBuf, String> {
-    // ponytail: 只从 PATH / ~/.jiucaihezi/tools/ 查找，不再内置媒体二进制。
+    // ponytail: 只从 PATH / ~/.comic-box/tools/ 查找，不再内置媒体二进制。
     let local = resolve_local_binary(program);
     if local.exists() {
         ensure_binary_executable(&local);
         return Ok(local);
     }
     let hint = match program {
-        "ffmpeg" => "请先安装 ffmpeg，例如 macOS 可运行：brew install ffmpeg",
+        "ffmpeg" => if cfg!(windows) { "请安装 Windows 版 FFmpeg，并将其 bin 目录加入 PATH 后重启应用。" } else { "请先安装 ffmpeg，例如 macOS 可运行：brew install ffmpeg" },
         "ffprobe" => "请先安装 ffprobe（通常随 ffmpeg 一起安装）。",
         "whisper-cli" | "whisper" => "请先安装 whisper。",
         "yt-dlp" | "yt_dlp" => "请先安装 yt-dlp。",
@@ -236,7 +217,7 @@ pub(crate) fn resolve_app_media_binary(
 }
 
 pub(crate) fn local_tools_python_path() -> Option<PathBuf> {
-    let path = resolve_home_dir().join(".jiucaihezi").join("tools").join("python");
+    let path = resolve_home_dir().join(".comic-box").join("tools").join("python");
     path.exists().then_some(path)
 }
 
@@ -271,7 +252,7 @@ fn python_from_wrapper_script(path: &Path) -> Option<PathBuf> {
 
 pub(crate) fn resolve_local_python() -> PathBuf {
     {
-        let tools_root = resolve_home_dir().join(".jiucaihezi").join("tools");
+        let tools_root = resolve_home_dir().join(".comic-box").join("tools");
         for candidate in [
             tools_root.join("bin").join("python3"),
             tools_root.join("python").join("bin").join("python3"),

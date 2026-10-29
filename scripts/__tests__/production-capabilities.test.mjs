@@ -2,7 +2,7 @@ import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import { createServer } from 'node:http'
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync, symlinkSync, readdirSync } from 'node:fs'
-import { join, resolve } from 'node:path'
+import { isAbsolute, join, resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { tmpdir } from 'node:os'
 import { DeepSeekHarness } from '../../src-tauri/resources/deepseek-harness/node_modules/@deepseek-ai/dsh-sdk-client/lib/index.js'
@@ -10,10 +10,11 @@ import { ensureProfilePluginLinks } from '../../src-tauri/resources/deepseek-har
 import { runHarnessTask } from '../../src-tauri/resources/deepseek-harness/run-task.mjs'
 
 const skills = resolve('public/skills')
+const shellTool = process.platform === 'win32' ? 'pwsh' : 'bash'
 const core = ['edit', 'glob', 'grep', 'present', 'read', 'skill', 'wiki_read_guidance', 'wiki_save_artifact', 'write']
 const groups = JSON.parse(readFileSync(join(skills, 'production-skills.json'), 'utf8'))
 
-async function fixture(t, { image = false, extraPatch = '', extras = false, ownTool = false, assemblyFailure = false } = {}) {
+async function fixture(t, { image = false, extraPatch = '', extras = false, ownTool = false, assemblyFailure = false, externalSkill = false } = {}) {
   const root = mkdtempSync(join(tmpdir(), 'jc-production-scope-'))
   const requests = []
   const bridgeCalls = []
@@ -75,6 +76,23 @@ createInterface({ input: process.stdin }).on('line', line => {
         args: [${JSON.stringify(mcp)}]
 `
   }
+  if (externalSkill) {
+    const directory = join(root, 'fixture-external')
+    mkdirSync(directory)
+    writeFileSync(join(directory, 'SKILL.md'), '---\nname: fixture-external\ndescription: fixture package\n---\nFOREIGN_PACKAGE_BODY\n')
+    const plugin = join(root, 'external-skill.mjs')
+    const module = new URL('../../src-tauri/resources/deepseek-harness/node_modules/@deepseek-ai/dsh-skill-filesystem/lib/index.js', import.meta.url).href
+    writeFileSync(plugin, `import { FileSystemSkillProvider } from ${JSON.stringify(module)};
+export const inject = ['skills'];
+export function apply(ctx) {
+  let provider;
+  ctx.skills.registerProvider(control => provider = new FileSystemSkillProvider(ctx, control, {
+    providerName: 'fixture-external', includeDefaultRoots: false, bundledSkillDir: ${JSON.stringify(root)}
+  }));
+  ctx.effect(() => () => provider.dispose());
+}`)
+    extraPatch += `- insert:\n    - id: external-skill-fixture\n      name: ${JSON.stringify(pathToFileURL(plugin).href)}\n`
+  }
   if (ownTool || assemblyFailure) {
     const plugin = join(root, 'own-tool.mjs')
     const toolsModule = new URL('../../src-tauri/resources/deepseek-harness/node_modules/@deepseek-ai/dsh-tools/lib/index.js', import.meta.url).href
@@ -107,8 +125,8 @@ export function apply(ctx) { ctx.on('agent/created', ({agent}) => {
       t.after(() => pending.release.resolve())
       return { arrived: pending.arrived.promise, release: () => pending.release.resolve() }
     }, plan(value) { calls = [...value] },
-    async run(route, { mode = route, sessionId = 'scope', harness = h } = {}) {
-      return runHarnessTask(harness, [{ type: 'text', text: '本地工具范围回归，完成后回复 OK。' }], { sessionId, productionMode: mode, productionRoute: route, onNotification() {} })
+    async run(route, { mode = route, sessionId = 'scope', harness = h, text = '本地工具范围回归，完成后回复 OK。' } = {}) {
+      return runHarnessTask(harness, [{ type: 'text', text }], { sessionId, productionMode: mode, productionRoute: route, onNotification() {} })
     },
     tools() { return requests.at(-1).tools.map(t => t.function.name).sort() },
     results() { return requests.at(-1).messages.filter(m => m.role === 'tool').map(m => m.content) },
@@ -206,6 +224,25 @@ test('resource discovery excludes foreign project skills and rejects symlink ali
   assert.equal(readFileSync(join(f.root, '合法原文.md'), 'utf8'), '合法原文保持不变')
 })
 
+test('an external Skill protects its package without making the parent workspace read-only', { timeout: 30000 }, async t => {
+  const f = await fixture(t, { externalSkill: true })
+  writeFileSync(join(f.root, '原作.md'), '合法项目原文')
+  f.plan([
+    { name: 'read', args: { file_path: '原作.md' } },
+    { name: 'write', args: { file_path: '创作记录.md', content: '允许保存' } },
+    { name: 'read', args: { file_path: 'fixture-external/SKILL.md' } },
+    { name: 'write', args: { file_path: 'fixture-external/SKILL.md', content: '不能覆盖' } },
+  ])
+  await f.run('manju')
+  assert.match(f.results()[0], /合法项目原文/)
+  assert.doesNotMatch(f.results()[1], /^Error:/)
+  assert.equal(readFileSync(join(f.root, '创作记录.md'), 'utf8'), '允许保存')
+  assert.match(f.results()[2], /Error:/)
+  assert.doesNotMatch(f.results()[2], /FOREIGN_PACKAGE_BODY/)
+  assert.match(f.results()[3], /只读/)
+  assert.match(readFileSync(join(f.root, 'fixture-external/SKILL.md'), 'utf8'), /FOREIGN_PACKAGE_BODY/)
+})
+
 test('legal tools still load business methods, save notes and archive the engineering script', { timeout: 30000 }, async t => {
   const f = await fixture(t)
   f.plan([{ name: 'skill', args: { name: 'jc-gongchengjuben' } },
@@ -229,7 +266,7 @@ test('single-Skill production keeps its route and cold-resumes it without restri
   let snapshot = await f.h.client.request('session/read', { sessionId: 'scope' })
   assert.equal(snapshot.events.findLast(e => e.type === 'user/message' && e.data.source.kind === 'user').data.source.productionRoute, 'manju')
   await f.run('none', { sessionId: 'ordinary' })
-  assert.ok(f.tools().includes('bash'))
+  assert.ok(f.tools().includes(shellTool))
   await f.h.close()
   const recovered = f.create()
   await recovered.start()
@@ -245,7 +282,7 @@ test('single-Skill production keeps its route and cold-resumes it without restri
   assert.ok(kinds.includes('screenplay'))
   assert.ok(!kinds.includes('engineering_script'))
   await f.run('none', { harness: recovered })
-  assert.ok(f.tools().includes('bash'))
+  assert.ok(f.tools().includes(shellTool))
 })
 
 test('forbidden tool calls never execute and novel confirmation fields remain route-specific', { timeout: 30000 }, async t => {
@@ -272,7 +309,7 @@ test('queued production scope is frozen across edits and cannot steer an ordinar
   gate.release()
   await running
   await f.h.client.request('session/wait', { sessionId: 'scope' })
-  assert.ok(f.requests[0].tools.some(tool => tool.function.name === 'bash'))
+  assert.ok(f.requests[0].tools.some(tool => tool.function.name === shellTool))
   assert.deepEqual(f.tools(), core)
   const snapshot = await f.h.client.request('session/read', { sessionId: 'scope' })
   const source = snapshot.events.findLast(e => e.type === 'user/message' && e.data.source.kind === 'user').data
@@ -307,7 +344,7 @@ test('ordinary single business Skill selection retains general capabilities and 
   await f.run('manju')
   assert.match(f.results()[0], /合法改编输入/)
   await f.run('none', { mode: 'skills:jc-novel', sessionId: 'personal-skill' })
-  assert.ok(f.tools().includes('bash'))
+  assert.ok(f.tools().includes(shellTool))
   assert.equal(f.requests.at(-1).tools.find(t => t.function.name === 'wiki_save_artifact').function.parameters.properties.artifact_kind.enum.length, 45)
 })
 
@@ -418,9 +455,29 @@ test('explicit ordinary same-name personal Skills load their own bodies without 
     writeFileSync(join(directory, 'SKILL.md'), `---\nname: ${name}\ndescription: personally selected capability\n---\nPERSONAL_BODY_${name}`)
     f.plan([{ name: 'skill', args: { name } }])
     await f.run('none', { mode: `skills:${name}`, sessionId: `personal-${name}` })
-    assert.ok(f.tools().includes('bash'))
+    assert.ok(f.tools().includes(shellTool))
     assert.match(f.results().at(-1), new RegExp(`PERSONAL_BODY_${name}`))
   }
+})
+
+test('intake stops after its final answer instead of automatically starting the pipeline', { timeout: 30000 }, async t => {
+  const f = await fixture(t)
+  f.plan([{ name: 'skill', args: { name: 'jc-manju-pipeline' } }, null,
+    { name: 'write', args: { file_path: join(f.root, 'unexpected-plan.md'), content: 'must not run' } }])
+  await f.run('manju', { text: '【本轮消息】\n\n【全自动成片·入稿】只入稿，等待启动卡确认。' })
+  assert.equal(f.requests.length, 2)
+  assert.equal(readdirSync(f.root).includes('unexpected-plan.md'), false)
+})
+
+test('intake refuses production checkpoints even when the model tries to advance', { timeout: 30000 }, async t => {
+  const f = await fixture(t)
+  writeFileSync(join(f.root, '剧本.md'), '# 第1集\n来源正文')
+  f.plan([{ name: 'skill', args: { name: 'jc-manju-pipeline' } },
+    { name: 'wiki_save_artifact', args: { artifact_kind: 'pipeline_checkpoint', video_model: 'H3', episode_number: 1,
+      content: JSON.stringify({ stage: 'plan', source_path: '剧本.md', outputs: [] }) } }])
+  await f.run('manju', { text: '【全自动成片·入稿】仅保存输入与风格。' })
+  assert.match(f.results().at(-1), /入稿/)
+  assert.equal(readdirSync(f.root).includes('wiki'), false)
 })
 
 test('actual SDK resumes a stopped pipeline until verified completion for both models', { timeout: 60000 }, async t => {
@@ -509,6 +566,14 @@ test('pipeline rejects asset writes without actual Wiki reads and rejects reads 
     { name: 'write', args: { file_path: join(f.root, 'wiki/项目资料/人物小传/甲.md'), content: '# 甲\n修改后的设定' } }, actor])
   await f.run('manju', { sessionId: 'read-gate' })
   assert.match(f.results().at(-1), /精准读取缺失或已过期/)
+  f.plan([
+    { name: 'write', args: { file_path: join(f.root, 'wiki/项目资料/道具说明/灯.md'), content: '# 灯\n正式说明' } },
+    read('wiki/项目资料/道具说明/灯.md'), read('wiki/项目风格/影片比例与风格.md'),
+    save('prop_asset', '# 灯提示词', { entity_name: '灯' }),
+  ])
+  await f.run('manju', { sessionId: 'read-gate' })
+  assert.match(f.results().at(-1), /未登记.*materials/)
+  assert.throws(() => readFileSync(join(f.root, 'wiki/资产/道具/灯/道具生图提示词.md')))
   f.plan([read('wiki/项目风格/影片比例与风格.md'), read('wiki/项目资料/人物小传/甲.md'), actor])
   await f.run('manju', { sessionId: 'read-gate' })
   assert.match(f.results().at(-1), /"status":"saved"/)
@@ -539,6 +604,7 @@ test('short-drama pipeline uses real chapter cuts, enforces reads, continues and
   checkpoint({ stage: 'scheme', outputs: ['wiki/改编方案/项目总纲.md'] })
   read('wiki/改编方案/项目总纲.md')
   save('adaptation_episode_plan', '# 逐章规划\n第一章山门：第1集门前呼喊；第2集看清来者后逃走，不取第二章。')
+  save('adaptation_cut', JSON.stringify({ source_path: originalCopy, chapter_heading: '第一章 山门', source_start: a.slice(0, 12), source_end: a.slice(-12) }), { episode_number: 1 })
   for (const [index, body] of [a, b].entries()) save('adaptation_cut', JSON.stringify({ source_path: originalCopy, chapter_heading: '第一章 山门', cut_start: body.slice(0, 12), cut_end: body.slice(-12) }), { episode_number: index + 1 })
   const cuts = ['wiki/改编方案/分集切分/第001集原文.md', 'wiki/改编方案/分集切分/第002集原文.md']
   checkpoint({ stage: 'cuts', episodes: [1], outputs: ['wiki/改编方案/逐章规划.md', cuts[0]] })
@@ -562,6 +628,7 @@ test('short-drama pipeline uses real chapter cuts, enforces reads, continues and
   for (const path of cuts) assert.doesNotMatch(readFileSync(join(f.root, path), 'utf8'), /远方援军抵达/)
   assert.ok(f.results().some(result => /必须先实际read/.test(String(result))))
   assert.ok(f.results().some(result => /尚有未切分原文/.test(String(result))))
+  assert.ok(f.results().some(result => /cut_start.*cut_end/.test(String(result))), '错误字段应明确指出字段名，不能误报为引用太短')
   assert.ok(f.requests.some(request => JSON.stringify(request.messages).includes('按jc-duanju-pipeline继续')))
   assert.deepEqual(f.tools(), core)
   await f.h.close()
@@ -581,7 +648,7 @@ test('short-drama writing may refresh registered adapted research but never orig
   const body = '顾云舟穿着青色旧袍，手握旧剑站在门前，听见门外的呼喊。'
   writeFileSync(join(f.root, '原作.md'), `第一章 山门\n${body}`)
   const calls = []
-  const read = path => calls.push({ name: 'read', args: { file_path: path.startsWith('/') ? path : join(f.root, path) } })
+  const read = path => calls.push({ name: 'read', args: { file_path: isAbsolute(path) ? path : join(f.root, path) } })
   const save = (artifact_kind, content, extra = {}) => calls.push({ name: 'wiki_save_artifact', args: { artifact_kind, content, ...extra } })
   const checkpoint = input => save('adaptation_checkpoint', JSON.stringify(input))
   const original = 'wiki/原始材料/原作/原文.md', cut = 'wiki/改编方案/分集切分/第001集原文.md', script = 'wiki/剧本/第001集/分集剧本.md'

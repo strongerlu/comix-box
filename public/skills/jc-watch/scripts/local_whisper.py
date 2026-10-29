@@ -31,8 +31,8 @@ MODEL_PREFERENCE = (
 
 MODEL_SEARCH_DIRS = (
     Path.home() / ".cache" / "whisper.cpp",
-    Path.home() / ".jiucaihezi" / "tools" / "whisper-models",
-    Path.home() / ".jiucaihezi" / "models" / "whisper",
+    Path.home() / ".comic-box" / "tools" / "whisper-models",
+    Path.home() / ".comic-box" / "models" / "whisper",
     Path.home() / ".local" / "share" / "whisper.cpp",
     Path("/opt/homebrew/share/whisper.cpp"),
     Path("/usr/local/share/whisper.cpp"),

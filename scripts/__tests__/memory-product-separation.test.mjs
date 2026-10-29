@@ -34,16 +34,14 @@ test('every repository test is registered exactly once as focused or legacy', ()
 test('memory product keeps its entry, release identity, and desktop release jobs', () => {
   const app = source('src/App.vue')
   const desktop = JSON.parse(source('src-tauri/tauri.conf.json'))
-  const ios = JSON.parse(source('src-tauri/tauri.ios.conf.json'))
   const workflow = source('.github/workflows/build.yml')
 
   assert.match(app, /<MemoryWorkbench \/>/)
-  assert.equal(desktop.identifier, 'com.jiucaihezi.desktop')
-  assert.deepEqual(desktop.plugins['deep-link'].desktop.schemes, ['jiucaihezi'])
-  assert.deepEqual(desktop.plugins.updater.endpoints, ['https://api.jiucaihezi.studio/updates/updater.json'])
-  assert.equal(ios.identifier, 'com.jiucaihezi.mobile')
-  for (const job of ['macos-arm:', 'macos-intel:', 'windows:']) assert.match(workflow, new RegExp(`^  ${job}`, 'm'))
-  assert.match(workflow, /needs: \[macos-arm, macos-intel, windows\]/)
+  assert.equal(desktop.identifier, 'com.comicbox.desktop')
+  assert.deepEqual(desktop.plugins['deep-link'].desktop.schemes, ['comic-box'])
+  assert.equal(desktop.plugins.updater, undefined)
+  for (const job of ['windows:']) assert.match(workflow, new RegExp(`^  ${job}`, 'm'))
+  assert.doesNotMatch(workflow, /macos-arm:|macos-intel:/)
 })
 
 test('legacy product-only paths are removed from the memory repository', () => {
@@ -189,20 +187,17 @@ test('memory product bundles its dynamic playback icon', () => {
   assert.ok(icons['play-arrow'])
 })
 
-test('Web and Desktop dist reject Python caches and prune them recursively', () => {
+test('Desktop dist rejects Python caches and prunes them recursively', () => {
   const root = mkdtempSync(join(tmpdir(), 'jc-dist-hygiene-'))
   try {
-    for (const target of ['web', 'desktop']) {
+    for (const target of ['desktop']) {
       const dist = join(root, target)
       const cache = join(dist, 'skills', 'example', '__pycache__')
       mkdirSync(cache, { recursive: true })
       writeFileSync(join(cache, 'script.cpython-314.pyc'), 'bytecode')
       writeFileSync(join(dist, 'index.html'), '<!doctype html>')
-      if (target === 'web') {
-        for (const file of ['404.html', 'boot-guard.js', '_headers']) writeFileSync(join(dist, file), '')
-      }
 
-      const envName = target === 'web' ? 'WEB_DIST_DIR' : 'DESKTOP_DIST_DIR'
+      const envName = 'DESKTOP_DIST_DIR'
       const env = { ...process.env, [envName]: dist }
       const audit = `scripts/audit-${target}-dist.mjs`
       const prune = `scripts/prune-${target}-dist.mjs`

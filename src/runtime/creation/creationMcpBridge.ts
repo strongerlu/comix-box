@@ -15,6 +15,7 @@ import { detectImageMimeFromBytes } from '@/utils/imageContracts'
 import { listDynamicCreationCapabilities, getDynamicCreationCapability, buildDynamicCreationPlan, CreationProtocolError, creationIdentity } from './creationProtocolClient'
 import { canonicalCreationJson } from '../../../shared/creation-schema.mjs'
 import { isTauriRuntime } from '@/utils/tauriEnv'
+import { hasRecoverableResultFailure, isUncertainSubmission } from './submissionSafety'
 
 interface BridgeEvent {
   requestId: string
@@ -25,6 +26,35 @@ interface BridgeEvent {
 const submissions = new Map<string, string>()
 const submissionBodies = new Map<string, string>()
 const pendingSubmissions = new Map<string, { fingerprint: string; promise: Promise<unknown> }>()
+
+export function __resetCreationSubmissionCacheForTests() {
+  submissions.clear()
+  submissionBodies.clear()
+  pendingSubmissions.clear()
+}
+
+function requestOwner(owner: string) { return owner.replace(/\\/g, '/').replace(/\/+$/, '') }
+
+async function requestScope(owner: string, requestId: string) {
+  return creationIdentity('creation-request', canonicalCreationJson({ identity: await creationIdentity(), owner: requestOwner(owner), requestId }))
+}
+
+async function requestIdentity(params: Record<string, unknown>) {
+  const requestId = requireString(params, 'requestId', 120)
+  const owner = requestOwner(optionalAbsoluteDirectory(params) || currentContext().project.owner || '')
+  return {
+    requestId,
+    scope: await requestScope(owner, requestId),
+    fingerprint: await creationIdentity('creation-request-body', canonicalCreationJson({ ...params, directory: owner, contextVersion: params.canvas === false ? owner : params.contextVersion })),
+  }
+}
+
+export async function findCreationTaskByRequest(owner: string, requestId: string) {
+  const store = useMediaTaskStore()
+  await store.init()
+  const scope = await requestScope(owner, requestId)
+  return store.tasks.find(task => task.source === 'creation' && !task.parentTaskId && task.creationRequest?.scope === scope)?.id
+}
 let sceneRecorder: ((document: Scene3DDocument) => Promise<Blob>) | undefined
 /** 按查询参数缓存上一次成功的目录（dynamic 或 legacy），网络抖动时沿用（分页/搜索各自一份）。 */
 const lastDynamicCatalogs = new Map<string, Record<string, unknown>>()
@@ -76,7 +106,8 @@ function publicTask(task: MediaTask) {
     downloadBytes: task.downloadBytes,
     downloadTotal: task.downloadTotal,
     error: task.errorMsg || task.error?.message,
-    requestId: task.planSnapshot?.protocol?.requestId,
+    requestId: task.creationRequest?.requestId || task.planSnapshot?.protocol?.requestId,
+    submissionUncertain: isUncertainSubmission(task),
     /** 已拿到上游任务号（参考图已上传、任务已交给模型）。 */
     submitted: Boolean(task.upstreamTaskId),
     capabilityId: task.planSnapshot?.protocol?.capabilityId,
@@ -253,7 +284,8 @@ async function handleBridgeRequestUnchecked(operation: string, params: Record<st
   if (operation === 'get_creation_task') {
     const task = store.getTask(requireString(params, 'taskId', 120))
     if (!task || task.source !== 'creation') throw new Error('未找到创作任务')
-    if (task.planSnapshot?.protocol?.prepared && !store.isTaskActive(task.id) && (task.status === 'pending' || task.status === 'running')) void store.refreshTaskResult(task.id).catch(() => {})
+    const resumable = task.planSnapshot?.protocol ? task.planSnapshot.protocol.prepared : task.upstreamTaskId && task.pollUrl && task.pollKind
+    if (resumable && !store.isTaskActive(task.id) && (task.status === 'pending' || task.status === 'running' || hasRecoverableResultFailure(task))) void store.refreshTaskResult(task.id).catch(() => {})
     return publicTask(task)
   }
   if (operation === 'list_creation_history') {
@@ -279,7 +311,7 @@ async function handleBridgeRequestUnchecked(operation: string, params: Record<st
   if (operation === 'add_creation_result_to_canvas') {
     const context = currentContext()
     if (params.contextVersion !== context.contextVersion) throw new Error('项目或画布已切换，请重新获取创作上下文')
-    if (!context.canvas || !context.project.owner) throw new Error('请先在韭菜盒子中打开项目画布')
+    if (!context.canvas || !context.project.owner) throw new Error('请先在COMIC-BOX中打开项目画布')
     return {
       added: await store.addTaskResultToCanvas(requireString(params, 'taskId', 120), {
         canvasId: context.canvas.id,
@@ -294,13 +326,19 @@ async function handleBridgeRequestUnchecked(operation: string, params: Record<st
     const context = currentContext()
     if (params.contextVersion !== context.contextVersion) throw new Error('项目或画布已切换，请重新获取创作上下文')
     const directory = optionalAbsoluteDirectory(params)
-    if (!context.project.owner && !directory) throw new Error('请先在韭菜盒子中选择项目，或传入 directory')
+    if (!context.project.owner && !directory) throw new Error('请先在COMIC-BOX中选择项目，或传入 directory')
     const requestId = requireString(params, 'requestId', 120)
-    const submissionScope = `${await creationIdentity()}:${requestId}`
+    const identity = await requestIdentity(params)
+    const submissionScope = identity.scope
     const existing = submissions.get(submissionScope)
     if (existing) {
-      if (submissionBodies.get(submissionScope) !== canonicalCreationJson(params)) throw new Error('requestId 已用于不同参数或项目')
+      if (submissionBodies.get(submissionScope) !== identity.fingerprint) throw new Error('requestId 已用于不同参数或项目')
       return { taskId: existing, duplicate: true }
+    }
+    const saved = store.tasks.find(task => task.source === 'creation' && !task.parentTaskId && task.creationRequest?.scope === identity.scope)
+    if (saved) {
+      if (saved.creationRequest!.fingerprint !== identity.fingerprint) throw new Error('requestId 已用于不同参数或项目')
+      return { taskId: saved.id, duplicate: true }
     }
     const modelId = requireString(params, 'modelId', 200)
     const catalog = getCreationModelSpec(modelId)?.source === 'local-comfy' ? { source: 'local' } : await creationModels(params)
@@ -347,12 +385,13 @@ async function handleBridgeRequestUnchecked(operation: string, params: Record<st
       referenceImages: Array.isArray(resolvedParams.images) ? resolvedParams.images.map(String) : [],
       referenceVideos: Array.isArray(resolvedParams.videos) ? resolvedParams.videos.map(String) : [],
       source: 'creation',
+      creationRequest: identity,
       directory: directory || (isTauriRuntime() ? context.project.owner : undefined),
       memory: true,
       plan,
     })
     submissions.set(submissionScope, taskId)
-    submissionBodies.set(submissionScope, canonicalCreationJson(params))
+    submissionBodies.set(submissionScope, identity.fingerprint)
     return { taskId, duplicate: false }
   }
   throw new Error('未知创作操作')
@@ -360,8 +399,7 @@ async function handleBridgeRequestUnchecked(operation: string, params: Record<st
 
 async function handleBridgeRequest(operation: string, params: Record<string, unknown>): Promise<unknown> {
   if (operation !== 'submit_creation_task') return handleBridgeRequestUnchecked(operation, params)
-  const scope = `${await creationIdentity()}:${requireString(params, 'requestId', 120)}`
-  const fingerprint = canonicalCreationJson(params)
+  const { scope, fingerprint } = await requestIdentity(params)
   const pending = pendingSubmissions.get(scope)
   if (pending) {
     if (pending.fingerprint !== fingerprint) throw new Error('同一 requestId 正在提交不同内容')

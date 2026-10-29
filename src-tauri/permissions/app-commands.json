@@ -59,11 +59,6 @@
           "remote_device_revoke",
           "remote_bridge_complete",
           "remote_bridge_publish",
-          "mobile_remote_status",
-          "mobile_remote_pair",
-          "mobile_remote_connect",
-          "mobile_remote_request",
-          "mobile_remote_disconnect",
           "save_generated_file",
           "erase_image_region",
           "dev_detect_project",
@@ -117,6 +112,7 @@
           "skill_material_compile",
           "media_cache_file",
           "media_concat_videos",
+          "media_review_video",
           "document_to_markdown_file",
           "document_path_to_markdown_file",
           "media_select_file",
@@ -205,15 +201,7 @@
           "screenshot_permission",
           "screenshot_begin",
           "screenshot_save_result",
-          "screenshot_validate_project",
-          "desktop_update_status",
-          "desktop_update_check",
-          "desktop_update_download",
-          "desktop_update_install",
-          "desktop_update_ack",
-          "desktop_update_task_begin",
-          "desktop_update_task_end",
-          "desktop_update_tasks"
+          "screenshot_validate_project"
         ],
         "deny": []
       }

@@ -110,7 +110,7 @@ frontmatter 至少包含 `name` 和 `description`。description 必须同时说�
 
 ## 宿主适配
 
-本 Skill 面向韭菜盒子记忆工作台。使用宿主当前可见的文件工具、Skill 选择和模型能力，不假定 `claude -p`、Codex 专用命令、MCP 服务或其它提供商 CLI 存在。
+本 Skill 面向COMIC-BOX记忆工作台。使用宿主当前可见的文件工具、Skill 选择和模型能力，不假定 `claude -p`、Codex 专用命令、MCP 服务或其它提供商 CLI 存在。
 
 当前桌面流程以用户提供的绝对路径和会话文件权限为准：
 

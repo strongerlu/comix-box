@@ -4,6 +4,7 @@ import { createServer } from 'node:http'
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { pathToFileURL } from 'node:url'
 import { build } from 'esbuild'
 import { Client } from '@modelcontextprotocol/sdk/client/index.js'
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js'
@@ -13,9 +14,9 @@ import { ensureProfilePluginLinks } from '../../src-tauri/resources/deepseek-har
 
 const root = mkdtempSync(join(tmpdir(), 'jc-native-bridge-'))
 await build({ entryPoints: ['src/runtime/direct/creativeToolContract.ts'], bundle: true, alias: { '@': './src' }, platform: 'node', format: 'esm', outfile: join(root, 'contract.mjs') })
-const { buildMemoryDesktopToolDefinitions } = await import(join(root, 'contract.mjs'))
+const { buildMemoryDesktopToolDefinitions } = await import(pathToFileURL(join(root, 'contract.mjs')).href)
 await build({ entryPoints: ['scripts/jiucaihezi-creation-mcp/index.ts'], bundle: true, platform: 'node', format: 'esm', outfile: join(root, 'mcp.mjs') })
-const { createCreationMcpServer } = await import(join(root, 'mcp.mjs'))
+const { createCreationMcpServer } = await import(pathToFileURL(join(root, 'mcp.mjs')).href)
 const names = ['create_3d_scene', 'inspect_3d_scene', 'edit_3d_scene', 'export_3d_scene_video']
 const catalog = buildMemoryDesktopToolDefinitions().filter(t => names.includes(t.function.name))
   .map(t => ({ name: t.function.name, description: t.function.description, inputSchema: t.function.parameters }))

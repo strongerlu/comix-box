@@ -199,3 +199,7 @@ SDK专项的现有主入口为`deepseek-session-lifecycle.test.mjs`、`deepseek-
 - 随包**Node22.23.2**执行五个SDK专项（patch、session-lifecycle、permission、manju-skill-scope、profile-plugins）：**50/50通过，0跳过**，同样包含原版对照。
 - `pnpm run typecheck`通过；`pnpm run test:tauri`：**491通过、2原有忽略**；`git diff --check`通过。
 - 未执行：真实中转型号能力上限、付费图/视频任务、真实用户数据升级、安装版GUI、Windows/Intel Mac原生验收；未打包、未发布、未改版本号/发布清单。
+
+### 2026-10-29 云端未知输出容量修正
+
+Windows COMIC-BOX 界面实测 Haiku 请求因 `128000 > 64000` 返回400，证明“未知云端统一128K输出”不能视为服务能力。现行优先级仍是同 provider/model 的有效显式元数据优先；仅缺失或无效元数据的云端输出兜底改为32768，与随包适配器未知模型默认输出一致，不维护按名称猜测的容量表，不修改官方重试和思考策略。上下文显示兜底1M保持；该值仍不是实际服务容量保证。显式大输出容量、Strata已有能力发现和本地256K/32768保持。32K是保守请求值，也不能保证所有未知服务支持；后续云端应发布准确能力元数据。

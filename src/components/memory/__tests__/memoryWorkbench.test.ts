@@ -9,10 +9,116 @@ import { findComposerSuggestion, replaceComposerSuggestion } from '../composerSu
 import { useFilteredList } from '@/composables/useFilteredList'
 import { beginMemoryRun, desktopConversationLiveState, desktopConversationRuns, executeDesktopHarnessRun, memoryRunKey, stopRun, type MemoryRun } from '@/services/desktopConversationRuntime'
 import { shouldReadNativeClipboardImage } from '@/utils/clipboard'
+import { searchSkills } from '@/utils/skillSearch'
+import { skillDisplayLabel } from '@/utils/skillDisplayLabel'
 
 function source(path: string) {
   return readFileSync(join(process.cwd(), path), 'utf8')
 }
+
+function composerFunction(name: string, dependencies: Record<string, unknown>) {
+  const body = source('src/components/memory/MemoryWorkbench.vue').match(new RegExp(`(?:async )?function ${name}\\([\\s\\S]*?\\n\\}`))?.[0]
+  assert.ok(body, `${name} must exist in the workbench`)
+  const { transformSync } = createRequire(join(process.cwd(), 'package.json'))('esbuild')
+  const code = transformSync(body, { loader: 'ts', target: 'es2022' }).code
+  return new Function(...Object.keys(dependencies), `${code}; return ${name}`)(...Object.values(dependencies))
+}
+
+test('composer menu anchors stay inside the viewport near the right and top edges', () => {
+  const viewport = { innerWidth: 1280, innerHeight: 800 }
+  const trigger = { getBoundingClientRect: () => ({ left: 1240, top: 760 }) }
+  const position = composerFunction('composerMenuPosition', { window: viewport, composerMenuTrigger: null })
+  assert.deepEqual(position({ currentTarget: trigger }), { left: 948, bottom: 48 })
+  viewport.innerWidth = 220
+  trigger.getBoundingClientRect = () => ({ left: 210, top: 810 })
+  assert.deepEqual(position({ currentTarget: trigger }), { left: 12, bottom: 12 })
+})
+
+test('permission tooltip stays above the bottom composer instead of outside the window', () => {
+  const chipTip = ref<{ top: number } | null>(null)
+  const show = composerFunction('showChipTip', { chipTip })
+  const rect = { left: 1200, top: 760, bottom: 792, width: 32 }
+  show({ currentTarget: { getBoundingClientRect: () => rect } }, '权限：工作区内修改')
+  assert.ok(chipTip.value && chipTip.value.top < rect.top)
+})
+
+test('composer menu keyboard navigation wraps, supports Home/End and restores focus on Escape', () => {
+  const calls: string[] = []
+  const document = { activeElement: null as unknown }
+  const buttons = [0, 1, 2].map(index => ({ focus() { document.activeElement = buttons[index] } }))
+  const navigate = composerFunction('handleComposerMenuKeydown', {
+    document, closeComposerMenus: (restore = false) => calls.push(restore ? 'close-and-focus' : 'close'),
+  })
+  const key = (value: string) => navigate({ key: value,
+    currentTarget: { querySelectorAll: () => buttons },
+    preventDefault() { calls.push('prevent') }, stopPropagation() { calls.push('stop') },
+  })
+  key('ArrowUp')
+  assert.equal(document.activeElement, buttons[2])
+  key('ArrowDown')
+  assert.equal(document.activeElement, buttons[0])
+  key('End')
+  assert.equal(document.activeElement, buttons[2])
+  key('Home')
+  assert.equal(document.activeElement, buttons[0])
+  calls.length = 0
+  key('Escape')
+  assert.deepEqual(calls, ['prevent', 'stop', 'close-and-focus'])
+  calls.length = 0
+  key('Tab')
+  assert.deepEqual(calls, ['close'])
+})
+
+test('compact Skill menu reuses production actions and keeps the existing manju submenu anchor', () => {
+  const calls: string[] = []
+  const anchor = { left: 948, bottom: 48 }
+  const composerSkillMenu = ref<typeof anchor | null>(anchor)
+  const manjuMenu = ref<typeof anchor | null>(null)
+  const skillCommand = { id: 'skill' }
+  const choose = composerFunction('chooseComposerSkill', {
+    composerSkillMenu, manjuMenu, skillCommand,
+    closeComposerMenus: () => { composerSkillMenu.value = null; manjuMenu.value = null },
+    focusComposerMenu: async (id: string) => { calls.push(`focus:${id}`) },
+    toggleShortDramaProduction: () => calls.push('short-drama'),
+    toggleNovelProduction: () => calls.push('novel'),
+    insertCommand: (command: unknown) => { assert.equal(command, skillCommand); calls.push('skill-picker') },
+  })
+  choose('manju')
+  assert.deepEqual(manjuMenu.value, anchor)
+  assert.equal(composerSkillMenu.value, null)
+  choose('short-drama')
+  choose('novel')
+  choose('other')
+  assert.deepEqual(calls, ['focus:memory-manju-options', 'short-drama', 'novel', 'skill-picker'])
+})
+
+test('permission menu keeps full-access confirmation before applying a new permission tier', () => {
+  const permissionTier = ref('workspace-write')
+  const permissionConfirm = ref(false)
+  const applied: string[] = []
+  const choose = composerFunction('choosePermission', {
+    permissionTier, permissionConfirm, closeComposerMenus() {}, focusComposerMenu: async () => {},
+    applyPermission: async (tier: string) => { applied.push(tier) },
+  })
+  choose('danger-full-access')
+  assert.equal(permissionConfirm.value, true)
+  assert.deepEqual(applied, [])
+  assert.equal(permissionTier.value, 'workspace-write')
+  choose('read-only')
+  assert.deepEqual(applied, ['read-only'])
+})
+
+test('Escape dismisses the all Skill picker before closing an open resource preview', () => {
+  const calls: string[] = []
+  const dismiss = composerFunction('handleGlobalKeydown', {
+    permissionMenu: ref(null), composerSkillMenu: ref(null), manjuMenu: ref(null), permissionConfirm: ref(false),
+    mentionOpen: ref(true), mentionScope: ref('skill'), previewResource: ref({}),
+    closeComposerMenus() {}, closeSkillPicker: () => calls.push('skill-picker'),
+    closeMention: () => calls.push('mention'), closePreview: () => calls.push('preview'),
+  })
+  dismiss({ key: 'Escape', target: null, defaultPrevented: false, preventDefault() {} })
+  assert.deepEqual(calls, ['skill-picker'])
+})
 
 test('chat model families use the requested order and merge remaining suppliers', () => {
   const workbench = source('src/components/memory/MemoryWorkbench.vue')
@@ -35,7 +141,7 @@ test('preview and creation docks share the topbar shrink rules', () => {
 })
 
 // Execute the actual SFC candidate loader without mounting the entire workbench.
-function mentionLoaderFixture(blockCatalog = false) {
+function mentionLoaderFixture(blockCatalog = false, bundled: unknown[] = [], custom = [{ name: 'story', description: '故事', enabled: true }]) {
   const { transformSync } = createRequire(join(process.cwd(), 'package.json'))('esbuild')
   const body = source('src/components/memory/MemoryWorkbench.vue').match(/const mentionItems = async[\s\S]*?(?=\nconst mentionKey)/)?.[0]
   assert.ok(body)
@@ -46,14 +152,14 @@ function mentionLoaderFixture(blockCatalog = false) {
   const conversations = ref<any[]>([])
   const conversation = ref<any>(null)
   let finishCatalog!: (entries: unknown[]) => void
-  const catalog = blockCatalog ? new Promise<unknown[]>(resolve => { finishCatalog = resolve }) : Promise.resolve([])
+  const catalog = blockCatalog ? new Promise<unknown[]>(resolve => { finishCatalog = resolve }) : Promise.resolve(bundled)
   const dependencies = {
-    mentionOpen, mentionScope, mentionTrigger, desktopOnlyRuntime: true, conversations, conversation,
+    skillDisplayLabel, mentionOpen, mentionScope, mentionTrigger, desktopOnlyRuntime: true, conversations, conversation,
     mcpStore: { allMcpTools: [{ serverId: 'github' }, { serverId: 'github' }, { serverId: 'local' }] },
     loadWebSkillCatalog: () => { calls.catalog++; return catalog },
-    agentStore: { getCustomSkills: () => { calls.customSkills++; return [{ name: 'story', description: '故事' }] } },
+    agentStore: { getCustomSkills: () => { calls.customSkills++; return custom } },
     sortSkillsForPicker: (entries: unknown[]) => entries,
-    manjuSelected: ref(false), MANJU_SKILLS: ['story'],
+    manjuSelected: ref(false), MANJU_SKILLS: ['story'], WIKI_MEMORY_SKILL: 'wiki-memory',
     novelSelected: ref(false), NOVEL_SKILLS: ['jc-novel', 'wiki-memory'],
     shortDramaSelected: ref(false), SHORT_DRAMA_SKILLS: ['jc-duanju', 'wiki-memory'], projectOwner: ref('/project'),
     files: {
@@ -62,11 +168,110 @@ function mentionLoaderFixture(blockCatalog = false) {
     },
     isOfficeResource: () => false,
   }
-  type Item = { type: string; id?: string; name?: string; display: string; description: string }
+  type Item = { type: string; id?: string; name?: string; display: string; description: string; source?: string; unavailableReason?: string }
   const code = transformSync(body, { loader: 'ts', target: 'es2022' }).code
   const load = new Function(...Object.keys(dependencies), `${code}; return mentionItems`)(...Object.values(dependencies)) as (query: string) => Promise<Item[]>
-  return { load, calls, mentionOpen, mentionScope, conversations, conversation, finishCatalog: () => finishCatalog([]) }
+  return { load, calls, mentionOpen, mentionScope, conversations, conversation, novelSelected: dependencies.novelSelected, finishCatalog: () => finishCatalog([]) }
 }
+
+test('all Skill candidates retain entries beyond 40, source metadata and existing deduplication', async () => {
+  const bundled = Array.from({ length: 65 }, (_, index) => ({ name: `skill-${index}`, displayName: `Skill ${index}`, description: '内置' }))
+  const fixture = mentionLoaderFixture(false, bundled, [
+    { name: 'skill-64', description: '同名自定义', enabled: true },
+    { name: 'custom-last', description: '自定义', enabled: true },
+    { name: 'disabled', description: '已停用', enabled: false },
+  ])
+  fixture.mentionScope.value = 'skill'
+  const items = await fixture.load('')
+  assert.equal(items.length, 66)
+  assert.equal(items.filter(item => item.name === 'skill-64').length, 1)
+  assert.equal(items.at(-1)?.name, 'custom-last')
+  assert.equal(items[64]?.source, 'builtin')
+  assert.equal(items[65]?.source, 'custom')
+  assert.ok(!items.some(item => item.name === 'disabled'))
+  assert.match(source('src/components/memory/MemoryWorkbench.vue'), /@select="selectMention"/)
+})
+
+test('all Skill browsing shows out-of-route skills as unavailable while ordinary mentions retain route filtering', async () => {
+  const fixture = mentionLoaderFixture(false, [
+    { name: 'jc-novel', displayName: '小说创作', description: '写作' },
+    { name: 'design', displayName: '设计', description: '图片' },
+  ])
+  fixture.mentionScope.value = 'skill'
+  fixture.novelSelected.value = true
+  const all = await fixture.load('')
+  assert.equal(all.length, 3)
+  assert.equal(all.find(item => item.name === 'jc-novel')?.unavailableReason, undefined)
+  assert.equal(all.find(item => item.name === 'design')?.unavailableReason, '请先退出小说创作，再选择此 Skill')
+  fixture.mentionScope.value = 'all'
+  const ordinary = await fixture.load('writing')
+  assert.deepEqual(ordinary.filter(item => item.type === 'skill').map(item => item.name), ['jc-novel'])
+})
+
+function allSkillPickerFixture() {
+  const { transformSync } = createRequire(join(process.cwd(), 'package.json'))('esbuild')
+  const component = source('src/components/memory/ComposerSkillPicker.vue')
+  const block = component.slice(component.indexOf('const filteredSkills = computed('), component.indexOf('\nwatch(filteredSkills'))
+  const items = Array.from({ length: 65 }, (_, index) => ({
+    type: 'skill' as const, name: `skill-${index}`, display: `Skill ${index}`, description: '写作工具', source: 'builtin' as 'builtin' | 'custom',
+  }))
+  items.push({ type: 'skill', name: 'role-designer', display: '角色设计', description: '影视角色外形设计', source: 'custom' })
+  const props = reactive({ items, selectedNames: ['skill-64', 'role-designer'] })
+  const query = ref('')
+  const category = ref('all')
+  const availableOnly = ref(false)
+  const code = transformSync(block, { loader: 'ts', target: 'es2022' }).code
+  const state = new Function('computed', 'searchSkills', 'props', 'query', 'category', 'availableOnly', `${code}; return { filteredSkills, categories }`)(computed, searchSkills, props, query, category, availableOnly)
+  return { ...state, props, query, category, availableOnly }
+}
+
+test('all Skill search and categories preserve complete results and original selection objects', () => {
+  const picker = allSkillPickerFixture()
+  assert.equal(picker.filteredSkills.value.length, 66)
+  assert.deepEqual(picker.categories.value.map((item: { count: number }) => item.count), [66, 65, 1, 2])
+  picker.category.value = 'builtin'
+  assert.equal(picker.filteredSkills.value.length, 65)
+  picker.category.value = 'selected'
+  assert.deepEqual(picker.filteredSkills.value.map((item: { name: string }) => item.name), ['skill-64', 'role-designer'])
+  picker.category.value = 'custom'
+  picker.query.value = 'juese'
+  assert.equal(picker.filteredSkills.value[0], picker.props.items[65])
+  assert.equal(picker.filteredSkills.value[0].name, 'role-designer')
+  picker.category.value = 'all'
+  picker.query.value = '没有这个技能xyz'
+  assert.deepEqual(picker.filteredSkills.value, [])
+  picker.query.value = ''
+  assert.equal(picker.filteredSkills.value.length, 66)
+})
+
+test('all Skill keyboard navigation can select a result beyond the previous limit without sending a message', () => {
+  const component = source('src/components/memory/ComposerSkillPicker.vue')
+  const body = component.match(/function handleKeydown\([\s\S]*?\n\}/)?.[0]
+  assert.ok(body)
+  const { transformSync } = createRequire(join(process.cwd(), 'package.json'))('esbuild')
+  const picker = allSkillPickerFixture()
+  const activeName = ref('skill-39')
+  const searchInput = ref({})
+  const events: Array<[string, unknown]> = []
+  const navigate = new Function('searchInput', 'filteredSkills', 'activeName', 'emit', `${transformSync(body, { loader: 'ts' }).code}; return handleKeydown`)(searchInput, picker.filteredSkills, activeName, (name: string, item: unknown) => events.push([name, item]))
+  const key = (value: string, isComposing = false) => navigate({ key: value, target: searchInput.value, isComposing, preventDefault() {}, stopPropagation() {} })
+  key('ArrowDown')
+  assert.equal(activeName.value, 'skill-40')
+  key('Enter', true)
+  assert.equal(events.length, 0)
+  key('Enter')
+  assert.equal(events[0]?.[0], 'select')
+  assert.equal(events[0]?.[1], picker.props.items[40])
+  key('Escape')
+  assert.equal(events[1]?.[0], 'close')
+  Object.assign(picker.props.items[41]!, { unavailableReason: '当前路线不可用' })
+  activeName.value = 'skill-40'
+  key('ArrowDown')
+  assert.equal(activeName.value, 'skill-42')
+  key('Enter')
+  assert.equal(events.at(-1)?.[1], picker.props.items[42])
+  assert.equal(picker.filteredSkills.value.length, 66)
+})
 
 async function promptly<T>(promise: Promise<T>): Promise<T> {
   let timer!: ReturnType<typeof setTimeout>
@@ -125,7 +330,7 @@ test('@session references use visible turns and survive as composer state for qu
   assert.match(workbench, /\.slice\(-12\)/)
   assert.match(workbench, /deepSeekPrompt\(userTurn\.content, skillSnapshot, dhHandoffTurns, dhWikiContext, activeReferencedSessions\)/)
   assert.match(workbench, /deepSeekPrompt\(text \|\|[\s\S]{0,150}sessionReferenceSnapshot\)/)
-  assert.match(workbench, /referencedSessions: referencedSessions\.value/)
+  assert.match(workbench, /const sessionReferenceSnapshot = referencedSessions\.value\.slice\(\)/)
   assert.match(workbench, /v-if="referencedSessions\.length"[\s\S]*移除会话引用/)
 })
 
@@ -415,7 +620,12 @@ test('memory right chat dock separates preview layout and collapses to a compact
   assert.match(workbench, /class="memory-new-conversation-icon"/)
   assert.match(workbench, /class="memory-model-icon"/)
   assert.doesNotMatch(workbench, /memory-mobile-creation/)
-  assert.equal(workbench.match(/title="创作面板"/g)?.length, 2)
+  assert.match(workbench, /<header v-if="desktopWindowHeader" class="memory-workspace-bar"/)
+  assert.ok(workbench.indexOf('class="memory-workspace-bar"') < workbench.indexOf('class="memory-main memory-chat-dock"'))
+  assert.match(workbench, /v-if="!desktopWindowHeader"\s+class="memory-creation-toggle"/)
+  assert.doesNotMatch(workbench, /title="创作智能体"|<span>创作智能体<\/span>/)
+  assert.match(workbench, /title="隐藏画布"/)
+  assert.doesNotMatch(workbench, /title="创作面板"|aria-label="创作面板"|<span>创作面板<\/span>/)
   assert.match(workbench, /\.memory-chat-dock-resizer::after/)
   assert.match(workbench, /\.memory-document \{[^}]*container-type: inline-size;/)
   assert.match(markdown, /@container \(max-width: 700px\)/)
@@ -426,6 +636,52 @@ test('memory right chat dock separates preview layout and collapses to a compact
   )
   assert.match(markdown, /\.outline-collapsed \.memory-document-outline\{position:absolute;/)
   assert.match(markdown, /<JcIcon v-else name="view-list" \/>/)
+})
+
+test('画布显示开关复用保存与会话绑定，并在异步操作期间阻止重复切换', async () => {
+  const workbench = source('src/components/memory/MemoryWorkbench.vue')
+  const body = /async function toggleCanvasVisibility\(\) \{[\s\S]*?\n\}/.exec(workbench)?.[0]
+  assert.ok(body)
+  const refs = {
+    creationClosing: { value: false }, canvasVisibilityPending: { value: false },
+    creationOpen: { value: false }, conversation: { value: null as object | null }, error: { value: '' },
+  }
+  const calls: string[] = []
+  let release: (() => void) | undefined
+  let failOpen = false
+  const toggle = new Function('refs', 'ops', `
+    const { creationClosing, canvasVisibilityPending, creationOpen, conversation, error } = refs;
+    const { closeCreationHost, openCreationForCurrentConversation, openCreationHost } = ops;
+    ${body}
+    return toggleCanvasVisibility;
+  `)(refs, {
+    closeCreationHost: () => { calls.push('save-and-close'); return new Promise<void>(resolve => { release = resolve }) },
+    openCreationForCurrentConversation: async () => { calls.push('open-bound') },
+    openCreationHost: async () => { if (failOpen) throw new Error('load failed'); calls.push('open-empty') },
+  }) as () => Promise<void>
+
+  await toggle()
+  refs.conversation.value = {}
+  await toggle()
+  assert.deepEqual(calls, ['open-empty', 'open-bound'])
+  refs.creationOpen.value = true
+  const pending = toggle()
+  assert.equal(refs.canvasVisibilityPending.value, true)
+  await toggle()
+  assert.deepEqual(calls, ['open-empty', 'open-bound', 'save-and-close'])
+  release?.()
+  await pending
+  assert.equal(refs.canvasVisibilityPending.value, false)
+  refs.creationClosing.value = true
+  await toggle()
+  assert.equal(calls.length, 3)
+  refs.creationClosing.value = false
+  refs.creationOpen.value = false
+  refs.conversation.value = null
+  failOpen = true
+  await toggle()
+  assert.equal(refs.error.value, '画布打开失败：load failed')
+  assert.equal(refs.canvasVisibilityPending.value, false)
 })
 
 test('窄对话 Dock 保留模型与对话名称，创作与 Skill 入口常驻', () => {
@@ -604,7 +860,7 @@ test('iPhone account settings reuse login while hiding commercial entries only',
   assert.match(settings, /gatewayDeleteAccount\(\)/)
   assert.match(settings, /注销账号/)
   assert.match(login, /accountOnly\?: boolean/)
-  // accountOnly 只管商业入口：充值/邀请/签到/下载页都依赖账号，移动端必须藏掉（2.1(b)）。
+  // accountOnly 只管商业入口：充值/下载页都依赖账号，移动端必须藏掉（2.1(b)）。
   assert.match(login, /v-if="!accountOnly" class="jc-login-link"[\s\S]*下载APP/)
   assert.match(login, /v-if="!accountOnly" class="jc-login-secondary"[\s\S]*注册账号/)
   // 但模型调用 Key 与保存不能被 accountOnly 藏：移动端只留一个需要账号的登录按钮，
@@ -613,7 +869,7 @@ test('iPhone account settings reuse login while hiding commercial entries only',
   assert.match(login, /<div v-else>\s*<label class="jc-login-label">模型调用 Key<\/label>/)
   assert.match(login, /<button class="jc-login-save" :disabled="busy"/)
   for (const page of ['privacy', 'support', 'terms']) {
-    assert.match(source(`public/${page}/index.html`), /韭菜盒子/)
+    assert.match(source(`public/${page}/index.html`), /COMIC-BOX/)
     assert.match(settings, new RegExp(`https://jiucaihezi\\.studio/${page}/`))
   }
 })
@@ -989,7 +1245,7 @@ test('memory mode keeps explicit Skill and plugin connections', () => {
   assert.match(workbench, /getCursorPosition\(editor\)/)
   assert.match(workbench, /findComposerSuggestion\(input\.value, getCursorPosition\(composerRef\.value\)\)/)
   assert.match(workbench, /replaceComposerSuggestion\(input\.value, suggestion, ''\)/)
-  assert.match(workbench, /v-show="mentionOpen" ref="mentionPopoverRef"/)
+  assert.match(workbench, /v-show="mentionOpen"\s+ref="mentionPopoverRef"/)
   assert.match(workbench, /addProjectFileReference\(option\.resource\)/)
   assert.match(workbench, /resource\.kind !== 'binary' \|\| isOfficeResource\(resource\)/)
   assert.match(workbench, /selectedSkillNames: skillSnapshot/)
@@ -1114,13 +1370,6 @@ test('memory media results stay project-first, downloadable, locatable and theme
   assert.match(bubble, /\.mtb-progress-fill[\s\S]*background: var\(--jc-primary\)/)
 })
 
-test('iPhone release metadata declares Photos permission and exempt encryption use', () => {
-  const infoPlist = source('src-tauri/Info.ios.plist')
-
-  assert.match(infoPlist, /<key>NSPhotoLibraryAddUsageDescription<\/key>\s*<string>[^<]+<\/string>/)
-  assert.match(infoPlist, /<key>ITSAppUsesNonExemptEncryption<\/key>\s*<false\/>/)
-})
-
 test('memory conversation uses one natural document flow for saved and streaming turns', () => {
   const workbench = source('src/components/memory/MemoryWorkbench.vue')
   const scrollNav = source('src/components/chat/ChatScrollNav.vue')
@@ -1231,7 +1480,7 @@ test('memory runs belong to their conversation instead of the visible one', () =
   const workbench = source('src/components/memory/MemoryWorkbench.vue')
   const openProject = workbench.match(/async function openProject\(owner: string\) \{([\s\S]*?)\n\}/)?.[1]
   const selectConversation = workbench.match(/async function selectConversation\(item: MemoryConversation\) \{([\s\S]*?)\n\}/)?.[1]
-  const deleteConversation = workbench.match(/async function deleteConversation\(item: MemoryConversation\) \{([\s\S]*?)const message = /)?.[1]
+  const deleteConversation = workbench.match(/async function deleteConversation\(item: MemoryConversation\) \{([\s\S]*?)\n\}/)?.[1]
 
   // 运行表按 owner::路径 索引：不同项目的对话 Raw 可能同名，只按路径索引会串项目。
   assert.match(workbench, /const runs = desktopOnlyRuntime \? desktopConversationRuns : reactive\(new Map<string, MemoryRun>\(\)\)/)
@@ -1249,7 +1498,7 @@ test('memory runs belong to their conversation instead of the visible one', () =
   // 删除对话仍然只停它自己的运行：授权随对话消失，继续跑会用旧授权落盘。
   assert.ok(deleteConversation, 'deleteConversation should exist')
   assert.match(deleteConversation, /const deletedRun = runs\.get\(memoryRunKey\(item\.resource\.owner, item\.resource\.path\)\)/)
-  assert.match(deleteConversation, /if \(deletedRun\) stopRun\(deletedRun\)/)
+  assert.ok(deleteConversation.indexOf('if (!(await confirmAction') < deleteConversation.indexOf('if (deletedRun) stopRun(deletedRun)'), 'a cancelled deletion must not stop the conversation run')
   // 落盘无条件，改视图有条件：切走了也要写完，但界面不被别的对话的运行改写。
   assert.match(workbench, /const isOnScreen = \(run: MemoryRun\) => run\.owner === projectOwner\.value && conversation\.value\?\.resource\.path === run\.resourcePath/)
   assert.match(workbench, /if \(run\.owner === projectOwner\.value\) rememberConversation\(complete\)/)
@@ -1275,6 +1524,8 @@ test('memory ignores stale streaming callbacks and stale resource loads', () => 
     /const generation = \+\+resourceOpenGeneration[\s\S]*if \(generation !== resourceOpenGeneration\) return/,
   )
   assert.match(workbench, /let conversationSelectionGeneration = 0/)
+  assert.match(workbench, /async function openResource\(resource: ProjectResourceOpenResult\)[\s\S]*?opened\.value = activeConversation\s*if \(creationMounted\.value\) emitEvent\('memory-media-plan-load', \{ origin: memoryMediaOrigin\(activeConversation\) \}\)/)
+  assert.match(workbench, /async function openCreationForCurrentConversation\(\)[\s\S]*?await openCreationHost\(\)[\s\S]*?selectionGeneration !== conversationSelectionGeneration[\s\S]*?const active = conversation\.value/)
 })
 
 test('model catalog coalesces concurrent refreshes', () => {
@@ -1317,7 +1568,7 @@ test('memory settings show the build version at the bottom', () => {
   assert.match(settings, /const appVersion = __APP_VERSION__/)
   assert.match(
     settings,
-    /<footer class="memory-settings-version">[\s\S]*版本 \{\{ desktopRuntime \? desktopUpdateStatus.currentVersion \|\| appVersion : appVersion \}\}/,
+    /<footer class="memory-settings-version">版本 \{\{ appVersion \}\}<\/footer>/,
   )
 })
 
@@ -1346,16 +1597,19 @@ test('memory Skill install card writes only after explicit approval', () => {
   assert.match(card, /继续修改/)
 })
 
-test('memory settings expose all shared themes and initialize Web to green once', () => {
+test('memory settings expose the shared three themes and initialize to warm daytime', () => {
   const settings = source('src/components/memory/MemorySettings.vue')
   const theme = source('src/composables/useTheme.ts')
+  const main = source('src/main.ts')
 
-  for (const key of ['white', 'light', 'dark', 'green', 'nord', 'dracula']) {
+  for (const key of ['light', 'dark', 'aurora']) {
     assert.match(settings, new RegExp(`key: '${key}'`))
   }
   assert.match(settings, /theme = option\.key/)
+  assert.match(theme, /const THEME_KEYS: Theme\[\] = \['light', 'dark', 'aurora'\]/)
   assert.match(theme, /jcMemoryThemeInitialized/)
-  assert.match(theme, /return 'green'/)
+  assert.match(theme, /return 'light'/)
+  assert.match(main, /localStorage\.setItem\('jcTheme', 'light'\)/)
 })
 
 test('memory file actions use the supported DOM prompt and headers share one baseline', () => {
@@ -1375,7 +1629,7 @@ test('memory file actions use the supported DOM prompt and headers share one bas
   assert.match(workbench, /v-for="resource in filteredFileWriteTargets"/)
   assert.match(workbench, /await appendFileWriteIndex\(owner, target\.path, savedPath\)/)
   assert.match(workbench, /appendProjectDirectoryIndex\(files, owner, directoryPath, savedPath\)/)
-  assert.match(workbench, /\.memory-workbench\.desktop-runtime \{ padding-top: 28px/)
+  assert.match(workbench, /\.memory-workbench\.desktop-runtime \{ --memory-workspace-bar-height: 36px; padding-top: var\(--memory-workspace-bar-height\)/)
   assert.match(workbench, /grid-template-rows: var\(--memory-header-height\)/)
 })
 
@@ -1410,7 +1664,7 @@ test('memory creation surface reuses the chat dock resize, host preview, and sti
     workbench,
     /:title="creationFocused \? '\u9000\u51fa\u4e13\u6ce8\u521b\u4f5c' : '\u4e13\u6ce8\u521b\u4f5c'"/,
   )
-  assert.match(workbench, /title="\u6536\u8d77\u521b\u4f5c\u9762\u677f"/)
+  assert.match(workbench, /title="隐藏画布"/)
   assert.match(creation, /flushCanvasSave: \(\) => flushCanvasSave\(true\)/)
   assert.match(workbench, /ref<\{\s*flushCanvasSave\?: \(\) => Promise<void>/)
   assert.match(workbench, /await creationPanelRef\.value\?\.flushCanvasSave\?\.\(\)/)
@@ -1481,16 +1735,19 @@ test('single-product UI contains no dormant Studio mode switches or editor sessi
   assert.equal(existsSync(join(process.cwd(), 'src/types/mention.ts')), false)
 })
 
-test('memory settings provide and persist accessible font sizes', () => {
+test('memory settings use standard typography without a global font size control', () => {
   const settings = source('src/components/memory/MemorySettings.vue')
   const workbench = source('src/components/memory/MemoryWorkbench.vue')
   const main = source('src/main.ts')
+  const theme = source('src/composables/useTheme.ts')
 
-  for (const size of [14, 16, 18, 30]) assert.match(settings, new RegExp(`value: ${size}`))
-  assert.match(settings, /localStorage\.setItem\('jcFontSize'/)
-  assert.match(settings, /style\.setProperty\('--font-base'/)
+  assert.doesNotMatch(settings, /fontSizes|fontSize|jcFontSize|全局字号/)
+  assert.doesNotMatch(main, /getItem\('jcFontSize'\)/)
+  assert.match(main, /removeItem\('jcFontSize'\)/)
+  assert.match(source('src/styles/design-tokens.css'), /--font-base:\s*14px/)
   assert.match(workbench, /font-size: var\(--font-base\)/)
-  assert.match(main, /localStorage\.getItem\('jcFontSize'\)/)
+  assert.match(settings, /\{ key: 'light', label: '暖昼' \}[\s\S]*\{ key: 'dark', label: '曜石' \}[\s\S]*\{ key: 'aurora', label: '极光' \}/)
+  assert.match(theme, /const THEME_KEYS: Theme\[\] = \['light', 'dark', 'aurora'\]/)
 })
 
 test('memory tree toggle collapses the desktop file tree and exposes reopen control', () => {
@@ -1735,7 +1992,7 @@ test('Desktop starts the memory workbench without the legacy OpenCode workspace'
   assert.match(desktop, /"http:\/\/localhost:1420"\.parse\(\)/)
   assert.match(
     desktop,
-    /#\[cfg\(all\(debug_assertions, not\(mobile\)\)\)\][\s\S]{0,300}"http:\/\/localhost:1420"/,
+    /if tauri::is_dev\(\)[\s\S]{0,300}"http:\/\/localhost:1420"/,
   )
   assert.doesNotMatch(desktop, /#\[cfg\(dev\)\]/)
   assert.match(desktop, /config\.url = tauri::WebviewUrl::External\(/)
@@ -1802,7 +2059,7 @@ test('同一个工作区不会同时被两个窗口打开', () => {
   assert.match(source('src-tauri/permissions/app-commands.json'), /"claim_workspace"/)
 })
 
-test('空窗口直接给项目入口，菜单里的快捷键都有落点', () => {
+test('Windows 空窗口提供项目与新窗口入口并保持远程窗口隔离', () => {
   const lib = source('src-tauri/src/lib.rs')
   const tree = source('src/components/filetree/ProjectFileTree.vue')
   const remote = source('src-tauri/src/commands/remote_bridge.rs')
@@ -1817,12 +2074,6 @@ test('空窗口直接给项目入口，菜单里的快捷键都有落点', () =>
   // 项目列表只有一处真源：空窗口和项目中心共用，两边各写一份迟早不一致。
   assert.match(tree, /const localProjectChoices = computed/)
   assert.equal((tree.match(/v-for="project in localProjectChoices"/g) || []).length, 2)
-  // 新建窗口放在第一个菜单的第一项 —— 多开是这个 App 的主用法。
-  assert.match(lib, /with_id\(\n\s*"jc:new-window",\n\s*"新建窗口",/)
-  // macOS 的快捷键经菜单分发到响应链：菜单里没有这一项，快捷键就没有落点。
-  // 之前这里没有「关闭窗口」，⌘W 一直是没反应的。
-  assert.match(lib, /PredefinedMenuItem::close_window\(app, Some\("关闭窗口"\)\)/)
-  assert.match(lib, /SubmenuBuilder::new\(app, "编辑"\)/)
   // 远程桥接的请求只发给一个窗口：广播会让每个窗口各处理一遍手机的同一条指令，
   // 各自回一次 remote_bridge_complete，手机可能拿到另一个窗口的报错。
   assert.match(remote, /fn emit_remote_request/)
@@ -2196,7 +2447,7 @@ test('Harness process and reasoning hang on the round that started them', () => 
   )
   assert.match(workbench, /function hasTurnProcess\(turnId: string\): boolean/)
   // 一轮一条 assistant 记录之后，纯工具轮会产出一条**内容为空**的锚点轮次（只给过程块做挂载点）。
-  // 空轮次绝不能渲染 article，否则又会留下一个孤儿「韭菜盒子」—— 判定要覆盖 article 的全部内容来源。
+  // 空轮次绝不能渲染 article，否则又会留下一个孤儿「COMIC-BOX」—— 判定要覆盖 article 的全部内容来源。
   assert.match(workbench, /v-if="turnHasBody\(turn\)"/)
   assert.match(workbench, /function turnHasBody\(turn: ConversationTurn\): boolean/)
   // 中途叙述挂在过程里（官方：step < 答案步的正文归过程，不归答案）；折叠标题只数工具步。
@@ -2207,7 +2458,7 @@ test('Harness process and reasoning hang on the round that started them', () => 
   // 在飞行必须带**耗时**与**上游状态**：上游一超时，一轮能静默两分多钟，只挂一个不动的
   // 「思考中」时用户无法分辨「在等上游」和「程序死了」。官方 TurnProcessNodeView 就是每秒跳的
   // 耗时（`LIVE_RUN_CLOCK_INTERVAL_MS`），重试另有 `message.retry.*` 一行。
-  // 文案不用官方的「深度求索中」—— 那是别家品牌词，我们是韭菜盒子。注释里保留官方原文作对照，
+  // 文案不用官方的「深度求索中」—— 那是别家品牌词，我们是COMIC-BOX。注释里保留官方原文作对照，
   // 但**标签文案**必须是我们自己的。
   assert.match(workbench, /class="memory-process-label">思考中，用时\{\{ formatLiveDuration\(runElapsed\) \}\}/)
   assert.doesNotMatch(workbench, /memory-process-label">深度求索/)
@@ -2284,7 +2535,7 @@ test('scene instruction waits for manual saves and sends actual selection, camer
     previewResource: ref({ type: 'scene3d', resource: { path: '.raw/jc-media/文档/train.jcscene' } }),
     sceneInstruction: ref('把选中的人坐到座位上'), sceneInstructionSending: ref(false), sending: ref(false), input,
     blockProductionTool: () => false,
-    sceneSaveQueue: new Promise<void>(resolve => { finishSave = resolve }), updateSaveErrors: { scene: '' },
+    sceneSaveQueue: new Promise<void>(resolve => { finishSave = resolve }), sceneSaveError: '',
     sceneEditor: ref({ getContext: () => ({ selectedId: 'passenger9', selectedBone: 'Head', camera: { focal: 85 }, time: 0 }) }),
     files: { readText: async () => { order.push('read'); return { revision: { value: 'after-manual-save' } } } },
     setEditorText: () => {}, composerRef: ref(null), scene3dSelected,
@@ -2303,6 +2554,14 @@ test('scene instruction waits for manual saves and sends actual selection, camer
   assert.match(sent[0], /85/)
   assert.match(sent[0], /expectedRevision/)
   assert.equal(scene3dSelected.value, true)
+  assert.equal(input.value, '原来的草稿')
+  order.length = 0
+  dependencies.sceneInstruction.value = '继续调整'
+  const failedDependencies = { ...dependencies, sceneSaveQueue: Promise.resolve(), sceneSaveError: '场景保存冲突' }
+  const failed = new Function(...Object.keys(failedDependencies), `${code}; return sendSceneInstruction`)(...Object.values(failedDependencies))
+  await failed()
+  assert.deepEqual(order, [])
+  assert.match(dependencies.error.value, /场景保存冲突/)
   assert.equal(input.value, '原来的草稿')
 })
 
@@ -2430,4 +2689,54 @@ test('explicit ordinary preferences restore literal Skills while old preferences
   assert.deepEqual(deps.selectedSkillNames.value, ['production:novel'])
   await restore(['jc-duanju'])
   assert.deepEqual(deps.selectedSkillNames.value, ['production:short-drama'])
+})
+
+ test('available Skill filter retains original objects and does not remove unavailable descriptions', () => {
+  const picker = allSkillPickerFixture()
+  Object.assign(picker.props.items[0]!, { unavailableReason: '请先退出当前路线' })
+  picker.availableOnly.value = true
+  assert.equal(picker.filteredSkills.value.length, 65)
+  assert.equal(picker.filteredSkills.value[0], picker.props.items[1])
+  picker.availableOnly.value = false
+  assert.equal(picker.filteredSkills.value.length, 66)
+  assert.equal(picker.props.items[0].description, '写作工具')
+})
+
+
+test('top-right chat toggle preserves the mounted conversation and restores compact or focused layouts', () => {
+  const chatHidden = ref(false)
+  const creationFocused = ref(false)
+  const chatDockMode = ref('expanded')
+  const creationOpen = ref(true)
+  const previewResource = ref(null)
+  const expression = source('src/components/memory/MemoryWorkbench.vue').match(/const chatVisible = computed\(\(\) => (.*)\)/)?.[1]
+  assert.ok(expression)
+  const chatVisible = new Function('computed', 'chatHidden', 'creationFocused', 'chatDockMode', 'creationOpen', 'previewResource', `return computed(() => ${expression})`)(computed, chatHidden, creationFocused, chatDockMode, creationOpen, previewResource)
+  const calls: string[] = []
+  const toggle = composerFunction('toggleChatVisibility', {
+    chatHidden, creationFocused, chatVisible,
+    expandChatDock() { chatDockMode.value = 'expanded'; calls.push('expand') },
+    stopChatDockResize() { calls.push('stop-resize') }, closeComposerMenus() { calls.push('close-menus') },
+  })
+  toggle()
+  assert.equal(chatHidden.value, true)
+  toggle()
+  assert.equal(chatVisible.value, true)
+  creationFocused.value = true
+  toggle()
+  assert.equal(creationFocused.value, false)
+  chatDockMode.value = 'compact'
+  toggle()
+  assert.equal(chatVisible.value, true)
+  assert.deepEqual(calls, ['stop-resize', 'close-menus', 'expand', 'expand', 'expand'])
+  chatDockMode.value = 'compact'
+  creationOpen.value = false
+  assert.equal(chatVisible.value, true)
+  const workbench = source('src/components/memory/MemoryWorkbench.vue')
+  assert.match(workbench, /const chatHidden = ref\(false\)/)
+  assert.match(workbench, /<main v-show="!chatHidden" ref="memoryMainEl"/)
+  const header = workbench.slice(workbench.indexOf('<header v-if="desktopWindowHeader"'), workbench.indexOf('<aside class="memory-tree"'))
+  assert.match(header, /@click="toggleCanvasVisibility"/)
+  assert.match(header, /@click="toggleChatVisibility"/)
+  assert.match(header, /v-if="creationFocused \|\| chatHidden"/)
 })

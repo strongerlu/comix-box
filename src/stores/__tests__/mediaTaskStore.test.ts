@@ -4,6 +4,9 @@ import { join } from 'node:path'
 import { test } from 'node:test'
 import { createPinia, setActivePinia } from 'pinia'
 
+import { runCreationOperation, __resetCreationSubmissionCacheForTests } from '@/runtime/creation/creationMcpBridge'
+import { hasRecoverableResultFailure, isUncertainSubmission } from '@/runtime/creation/submissionSafety'
+import { creationTaskStage } from '@/utils/creationPresentation'
 import { buildCreationRunPlan } from '@/runtime/creation/creationMediaPlan'
 import { __resetApiKeyMemoryCacheForTests } from '@/services/newApiClient'
 import { useProjectStore } from '@/stores/projectStore'
@@ -50,7 +53,7 @@ interface TauriTaskFileStore {
   restore(): void
 }
 
-function installTauriTaskFileStore(): TauriTaskFileStore {
+function installTauriTaskFileStore(downloadFailures: Record<string, string> = {}): TauriTaskFileStore {
   const contents = new Map<string, Map<string, string>>()
   const calls: Array<{ command: string; root: string; path: string }> = []
   const downloads: string[] = []
@@ -84,8 +87,8 @@ function installTauriTaskFileStore(): TauriTaskFileStore {
             }
           } = {},
         ) {
-          if (command === 'desktop_update_task_begin') return 'update-task-fixture'
-          if (command === 'desktop_update_task_end') return
+
+
           if (command === 'retain_media_download_key') return '0'.repeat(64)
           if (command === 'get_media_download_key') return 'session-cloud'
           if (command === 'http_cancel_project_download') return
@@ -98,6 +101,7 @@ function installTauriTaskFileStore(): TauriTaskFileStore {
             const path = args.request?.relative_path || ''
             const requestUrl = args.request?.url || ''
             downloads.push(requestUrl)
+            if (downloadFailures[requestUrl]) throw new Error(downloadFailures[requestUrl])
             if (requestUrl.includes('task_download_fail_001')) {
               throw new Error('HTTP 403: request blocked: port 8795 is not allowed')
             }
@@ -106,6 +110,7 @@ function installTauriTaskFileStore(): TauriTaskFileStore {
           }
           if (command === 'http_request') {
             const url = args.request?.url || ''
+            if (url.includes('/v1/creation/capabilities')) return { status: 404, body: '{}', headers: {} }
             if (url.endsWith('/v1/videos/task_retry_cdn_video')) {
               return { status: 200, body: JSON.stringify({ status: 'completed', metadata: { url: 'https://cdn.example.test/fresh.mp4' } }), headers: {} }
             }
@@ -500,7 +505,7 @@ test('mediaTaskStore waits for initialization before submitting a new task', () 
 
   assert.match(
     source,
-    /async function submitTaskAllowed\([\s\S]*?\): Promise<string> \{\s+await init\(\)/,
+    /async function submitTask\([\s\S]*?\): Promise<string> \{\s+const capturedProjectId = captureWebCreationProjectId\(params\)\s+await init\(\)/,
   )
 })
 
@@ -519,7 +524,6 @@ test('mediaTaskStore uses the immutable canvas target owner for Desktop result p
   assert.match(source, /const webRuntime = !isTauriRuntime\(\)/)
   assert.match(source, /String\(task\.projectId \|\| ''\)/)
   assert.match(source, /String\(task\.projectPath \|\| ''\)/)
-  assert.match(source, /task\.assetUri && owner && task\.assetUri\.startsWith\(`\$\{owner\}\/`\)/)
   assert.match(source, /await emitEventAsync\('canvas:before-task-write', payload\)/)
   assert.match(
     source,
@@ -1870,7 +1874,7 @@ test(
 
 test('retry persistence holds the task in the active set while re-reading and downloading', () => {
   const source = readFileSync(join(process.cwd(), 'src/stores/mediaTaskStore.ts'), 'utf8')
-  const retry = source.match(/async function retryMediaPersistenceAllowed\(taskId: string\): Promise<boolean> \{[\s\S]*?\n  \}/)?.[0] || ''
+  const retry = source.match(/async function retryMediaPersistence\(taskId: string\): Promise<boolean> \{[\s\S]*?\n  \}/)?.[0] || ''
 
   assert.match(retry, /activeTaskIds\.value\.add\(task\.id\)/)
   assert.match(retry, /finally \{\s*\n?\s*activeTaskIds\.value\.delete\(task\.id\)/)
@@ -2117,7 +2121,8 @@ test(
       const store = useMediaTaskStore()
       await store.init()
 
-      assert.equal(store.getTask(savedTask.id)?.status, 'pending')
+      assert.equal(store.getTask(savedTask.id)?.status, 'failed')
+      assert.equal(store.getTask(savedTask.id)?.submissionUncertain, true)
       assert.equal(store.isTaskActive(savedTask.id), false)
       assert.equal(store.runningCount, 0)
       assert.equal(store.hasRunning, false)
@@ -2164,7 +2169,7 @@ test(
       releaseStorage()
       await initialization
       assert.equal(loadCalls, 1)
-      assert.equal(store.getTask('mtask_wait_for_sqlite')?.status, 'pending')
+      assert.equal(store.getTask('mtask_wait_for_sqlite')?.submissionUncertain, true)
     } finally {
       __setMediaTaskStorageInitializerForTests(null)
       __setMediaTaskLoaderForTests(null)
@@ -3053,7 +3058,7 @@ test(
 )
 
 test(
-  'mediaTaskStore does not fail pending creation tasks without poll metadata during init recovery',
+  'restored creation tasks without a receipt are marked uncertain instead of waiting forever',
   { concurrency: false },
   async () => {
     const savedTasks = [
@@ -3108,8 +3113,9 @@ test(
     try {
       await store.init()
       const task = store.getTask('mtask_recover_pending')
-      assert.equal(task?.status, 'pending')
-      assert.equal(task?.errorMsg, undefined)
+      assert.equal(task?.status, 'failed')
+      assert.equal(task?.submissionUncertain, true)
+      assert.match(task?.errorMsg || '', /待核实/)
     } finally {
       storage.restore()
     }
@@ -3234,4 +3240,138 @@ test('desktop download cancellation pauses only the transfer and can resume with
     assert.equal(store.getTask('mtask_pause_native')?.downloadState, 'complete')
     assert.deepEqual(files.downloads, [url])
   } finally { files.restore(); storage.restore() }
+})
+
+
+test('公网视频连接失败通过原任务content取回，鉴权失败和未知渠道不回退', { concurrency: false }, async () => {
+  for (const scenario of [
+    { model: '特价渠道 MiniMax H3 480p-1080p', error: '下载连接失败：tls handshake eof', fallback: true },
+    { model: '特价渠道 MiniMax H3 480p-1080p', error: 'HTTP 403', fallback: false },
+    { model: 'unknown-video', error: '下载连接失败：tls handshake eof', fallback: false },
+  ]) {
+    const signed = 'https://cdn.example.test/recovered.mp4?signature=secret'
+    const storage = installLocalStorage({ jc_media_tasks_v1: JSON.stringify([{
+      id: 'mtask_content_fallback', type: 'video', model: scenario.model,
+      modelLabel: scenario.model, prompt: '小站', referenceImages: [],
+      status: 'success', progress: 100, progressText: '完成', createdAt: 1,
+      source: 'creation', resultUrl: signed, upstreamTaskId: 'task_same_paid_job',
+      assetStatus: 'failed', directory: '/projects/fallback',
+    }]) })
+    const files = installTauriTaskFileStore({ [signed]: scenario.error })
+    setActivePinia(createPinia())
+    __resetApiKeyMemoryCacheForTests('session-cloud')
+    const store = useMediaTaskStore()
+    try {
+      await store.init()
+      await withImmediateTimers(async () => {
+        assert.equal(await store.retryMediaPersistence('mtask_content_fallback'), scenario.fallback)
+      })
+      assert.deepEqual([...new Set(files.downloads)], scenario.fallback
+        ? [signed, 'https://api.jiucaihezi.studio/v1/videos/task_same_paid_job/content'] : [signed])
+      assert.equal(store.getTask('mtask_content_fallback')?.assetStatus, scenario.fallback ? 'local' : 'failed')
+      assert.equal(store.getTask('mtask_content_fallback')?.upstreamTaskId, 'task_same_paid_job')
+    } finally { files.restore(); storage.restore() }
+  }
+})
+
+test('Windows mixed path separators still write the same project canvas without accepting sibling roots', { concurrency: false }, async () => {
+  for (const allowed of [true, false]) {
+    const owner = allowed ? String.raw`F:\projects\episode` : String.raw`F:\projects\episode-other`
+    const canvasPath = 'jc-canvas/windows.jccanvas'
+    const storage = installLocalStorage({ jc_media_tasks_v1: JSON.stringify([{
+      id: 'mtask_windows_paths', type: 'video', model: '特价渠道 MiniMax H3 480p-1080p',
+      prompt: '亮灯', referenceImages: [], status: 'success', progress: 100, createdAt: 1,
+      source: 'creation', directory: 'F:/projects/episode', assetStatus: 'local',
+      assetUri: 'F:/projects/episode/.raw/jc-media/视频/episode.mp4', projectPath: '.raw/jc-media/视频/episode.mp4',
+    }]) })
+    const files = installTauriTaskFileStore()
+    files.set(owner, canvasPath, targetedCanvasDocument('windows-canvas'))
+    setActivePinia(createPinia())
+    const store = useMediaTaskStore()
+    try {
+      await store.init()
+      assert.equal(await store.addTaskResultToCanvas('mtask_windows_paths', {
+        canvasId: 'windows-canvas', canvasPath, owner, operation: 'append', referenceNodeIds: [],
+      }), allowed)
+      assert.equal(JSON.parse(files.get(owner, canvasPath) || '{}').scene.length, allowed ? 1 : 0)
+    } finally { files.restore(); storage.restore() }
+  }
+})
+
+
+test('submission timeouts remain uncertain after restart, while validation errors remain rejected', { concurrency: false }, async () => {
+  const storage = installLocalStorage({ jc_media_tasks_v1: JSON.stringify([{
+    id: 'mtask_unknown_submission', type: 'image', model: 'xy-gpt-image-2.5-flare-1k',
+    modelLabel: '图片', prompt: '人物参考', referenceImages: [], status: 'running', progress: 40,
+    progressText: '提交中', source: 'creation', createdAt: 1, directory: '/projects/unknown',
+    planSnapshot: { pollKind: 'image' },
+  }]) })
+  const files = installTauriTaskFileStore()
+  setActivePinia(createPinia())
+  const store = useMediaTaskStore()
+  try {
+    await store.init()
+    const task = store.getTask('mtask_unknown_submission')
+    assert.equal(task?.status, 'failed')
+    assert.equal(task?.submissionUncertain, true)
+    assert.match(task?.progressText || '', /待核实/)
+  } finally { files.restore(); storage.restore() }
+})
+
+
+test('timeout presentation distinguishes unknown receipt from rejected, accepted and upload failures', () => {
+  const failed = { status: 'failed' as const, errorMsg: 'signal is aborted without reason' }
+  assert.equal(isUncertainSubmission(failed), true)
+  assert.equal(isUncertainSubmission({ ...failed, errorMsg: 'The operation was aborted' }), true)
+  assert.equal(creationTaskStage(failed), '提交结果待核实')
+  assert.equal(isUncertainSubmission({ ...failed, upstreamTaskId: 'accepted-task' }), false)
+  assert.equal(isUncertainSubmission({ ...failed, errorMsg: 'HTTP 429: too many requests' }), false)
+  assert.equal(isUncertainSubmission({ ...failed, error: { stage: 'upload' } }), false)
+  assert.equal(hasRecoverableResultFailure({ ...failed, upstreamTaskId: 'accepted-task' }), true)
+  assert.equal(hasRecoverableResultFailure(failed), false)
+  assert.equal(hasRecoverableResultFailure({ ...failed, upstreamTaskId: 'accepted-task', errorMsg: 'content moderation rejected' }), false)
+})
+
+test('legacy MCP request identity persists before submission and prevents cold-restart duplicate charges', { concurrency: false }, async () => {
+  const storage = installLocalStorage()
+  const files = installTauriTaskFileStore()
+  setActivePinia(createPinia())
+  __resetApiKeyMemoryCacheForTests('session-cloud')
+  __resetCreationSubmissionCacheForTests()
+  const project = useProjectStore()
+  const prior = project.projectDir.value
+  project.projectDir.value = '/projects/request-identity'
+  let executions = 0
+  __setCreationSubmitExecutorForTests(async () => {
+    executions++
+    const raw = JSON.parse((globalThis as any).localStorage.getItem('jc_media_tasks_v1'))
+    const saved = typeof raw === 'string' ? JSON.parse(raw) : raw
+    assert.equal(saved[0].creationRequest.requestId, 'cold-safe-request')
+    return { url: 'https://webstatic.aiproxy.vip/output/cold-safe.png', type: 'image' }
+  })
+  try {
+    const context = await runCreationOperation('get_creation_context', {}) as any
+    const input = { contextVersion: context.contextVersion, requestId: 'cold-safe-request',
+      modelId: 'runninghub/api/rh-gpt2-image', directory: '/projects/request-identity', canvas: false,
+      params: { prompt: '同一请求', aspectRatio: '16:9', images: ['https://cdn.jiucaihezi.studio/input.png'] } }
+    const first = await runCreationOperation('submit_creation_task', input) as any
+    await waitFor(() => useMediaTaskStore().getTask(first.taskId)?.status === 'success')
+    await useMediaTaskStore().flushPersistence()
+    __resetCreationSubmissionCacheForTests()
+    setActivePinia(createPinia())
+    useProjectStore().projectDir.value = '/projects/request-identity'
+    const restoredContext = await runCreationOperation('get_creation_context', {}) as any
+    const replay = { ...input, contextVersion: restoredContext.contextVersion }
+    const second = await runCreationOperation('submit_creation_task', replay) as any
+    assert.equal(second.taskId, first.taskId)
+    assert.equal(second.duplicate, true)
+    assert.equal(executions, 1)
+    await assert.rejects(runCreationOperation('submit_creation_task', { ...replay, params: { ...input.params, prompt: '不同内容' } }), /requestId/)
+    assert.equal(executions, 1)
+  } finally {
+    project.projectDir.value = prior
+    __resetCreationSubmissionCacheForTests()
+    __setCreationSubmitExecutorForTests(null)
+    files.restore(); storage.restore()
+  }
 })

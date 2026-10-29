@@ -24,7 +24,7 @@ function createMemoryStorage(): Storage {
 test('extractApiKeyFromCallbackUrl accepts supported callback key aliases', () => {
   assert.equal(extractApiKeyFromCallbackUrl('tauri://localhost/index.html?key=sk-abc12345678901234567890'), 'sk-abc12345678901234567890')
   assert.equal(extractApiKeyFromCallbackUrl('tauri://localhost/?key=sk-root12345678901234567890'), 'sk-root12345678901234567890')
-  assert.equal(extractApiKeyFromCallbackUrl('jiucaihezi://auth/callback?key=sk-deeplink12345678901234567890'), 'sk-deeplink12345678901234567890')
+  assert.equal(extractApiKeyFromCallbackUrl('comic-box://auth/callback?key=sk-deeplink12345678901234567890'), 'sk-deeplink12345678901234567890')
   assert.equal(extractApiKeyFromCallbackUrl('tauri://localhost/index.html?jcApiKey=sk-def12345678901234567890'), 'sk-def12345678901234567890')
   assert.equal(extractApiKeyFromCallbackUrl('tauri://localhost/index.html?api_key=sk-ghi12345678901234567890'), 'sk-ghi12345678901234567890')
   assert.equal(extractApiKeyFromCallbackUrl('tauri://localhost/index.html?key=not-a-real-key'), '')
@@ -68,7 +68,7 @@ test('consumeApiKeyCallbackUrl accepts desktop deep link callback URLs', () => {
   const state = prepareApiKeyCallbackIntent(storage)
 
   const key = consumeApiKeyCallbackUrl({
-    href: `jiucaihezi://auth/callback?key=sk-deeplinkcallback12345678901234567890&state=${state}`,
+    href: `comic-box://auth/callback?key=sk-deeplinkcallback12345678901234567890&state=${state}`,
     storage,
   })
 

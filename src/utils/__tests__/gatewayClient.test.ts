@@ -12,6 +12,7 @@ import {
   clearGatewaySession,
   clearLegacyAuthStorage,
   getApiKey,
+  getGatewayBaseUrl,
   getGatewaySessionToken,
   gatewaySessionAuthenticated,
   extractGatewayBaseUrl,
@@ -53,6 +54,16 @@ async function withLocalStorage(values: Record<string, string>, fn: (store: Map<
 test('Gateway base URL is the formal production gateway', () => {
   assert.equal(DEFAULT_API_BASE_URL, 'https://api.jiucaihezi.studio')
   assert.equal(DEFAULT_GATEWAY_BASE_URL, DEFAULT_API_BASE_URL)
+})
+
+test('Windows desktop dev uses native HTTPS while browser preview retains the CORS proxy', () => {
+  const prior = (globalThis as any).window
+  try {
+    ;(globalThis as any).window = { location: { origin: 'http://localhost:1420' }, __TAURI_INTERNALS__: {} }
+    assert.equal(getGatewayBaseUrl(), DEFAULT_API_BASE_URL)
+    ;(globalThis as any).window = { location: { origin: 'http://localhost:1420' } }
+    assert.equal(getGatewayBaseUrl(), '/__jc_api')
+  } finally { (globalThis as any).window = prior }
 })
 
 test('buildGatewayHeaders sends ordinary API key headers without Gateway session header', async () => {
@@ -413,11 +424,11 @@ test('normalizeGatewayUser preserves web membership fields and aliases', () => {
   })
 })
 
-test('normalizeGatewayUser exposes invite and request fields used by the user center', () => {
+test('normalizeGatewayUser retains request counts without exposing retired referral fields', () => {
   const user = normalizeGatewayUser({
     data: {
       id: 'u5',
-      username: '邀请用户',
+      username: '测试用户',
       aff_code: 'aff_123456',
       request_count: 27,
       plan: 'web',
@@ -425,8 +436,8 @@ test('normalizeGatewayUser exposes invite and request fields used by the user ce
     },
   })
 
-  assert.equal(user.affCode, 'aff_123456')
-  assert.equal(user.aff_code, 'aff_123456')
+  assert.equal('affCode' in user, false)
+  assert.equal('aff_code' in user, false)
   assert.equal(user.requestCount, 27)
   assert.equal(user.plan, 'web')
 })
@@ -619,4 +630,12 @@ test('gateway preserves OpenRouter capacity fields instead of falling back', () 
   const [model] = normalizeGatewayModels({ data: [{ id: 'minimax/minimax-m3.1-flash:free', context_length: 1000000, top_provider: { max_completion_tokens: 524288 } }] })
   assert.equal(model?.contextWindow, 1000000)
   assert.equal(model?.maxOutputTokens, 524288)
+})
+test('model capacity metadata accepts standard declared aliases without inventing a model family limit', () => {
+  const [model] = normalizeGatewayModels({ data: [{ id: 'future-chat', taskTypes: ['chat'], top_provider: { context_length: '98304', max_completion_tokens: '24576' } }] })
+  assert.equal(model.contextWindow, 98304)
+  assert.equal(model.maxOutputTokens, 24576)
+  const [invalid] = normalizeGatewayModels({ data: [{ id: 'future-chat', context_window: true, max_output_tokens: Infinity }] })
+  assert.equal(invalid.contextWindow, undefined)
+  assert.equal(invalid.maxOutputTokens, undefined)
 })

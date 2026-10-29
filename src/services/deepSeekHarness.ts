@@ -4,7 +4,6 @@ import { findCustomProvider, getCustomProviders, saveCustomProviders } from '@/u
 import { deriveTurnTokenUsage } from '../../src-tauri/resources/deepseek-harness/node_modules/@deepseek-ai/dsh-token-meter/lib/types/client.js'
 import { invoke } from '@tauri-apps/api/core'
 import { appDataDir, join, resolveResource } from '@tauri-apps/api/path'
-import { mkdir, writeTextFile } from '@tauri-apps/plugin-fs'
 import type { JSONRPCMessage } from '@modelcontextprotocol/sdk/types.js'
 import type { DirectMessageFile, ResolvedDirectAttachment } from '@/utils/directMessageBuilder'
 import type { ConversationTurn } from '@/runtime/memory/conversationTranscript'
@@ -317,12 +316,14 @@ export function deepSeekExitText(diagnostics: Pick<McpStdioDiagnostics, 'exitCod
 }
 
 /**
- * 官方 `failureMessage()`：只有几个已知 code 有专属文案，其余原样透出 message。
+ * 沿用官方 failureMessage；NewAPI 的额度不足可能被 SDK 统一归为 AUTH，先识别实际原因。
  * 官方那两个 `ACCOUNT_*` 分支针对「退出官方账号登录」，我们不接官方账号，没有这两条。
  */
 export function deepSeekFailureText(message: string, code?: string): string {
   if (code === 'session/writer-held' || /^session "[^"\n]+" is already owned by an active write handle$/.test(message))
     return '这个对话正被另一个运行时占用。请关闭占用它的实例，释放后可在原对话重试。'
+  if (/insufficient[_ ]quota|额度不足|余额不足|预扣费额度/i.test(message))
+    return '模型服务额度不足，请充值后继续；已保存的项目进度会保留。'
   if (code === 'AUTH') return 'API 密钥无效'
   if (code === 'QUOTA' || code === 'ACCOUNT_QUOTA') return '当前请求的额度已用尽'
   return message
@@ -596,7 +597,7 @@ function deepSeekMessageText(content: any): string {
  * `hasAssistantReplyContent`：`tool-call` 块不算正文；`text` 块必须 `trim()` 后非空。
  *
  * 实测踩到：纯工具步的 assistant/message 会带一个只含两个换行的 text 块（`'\n\n'`），
- * 不 trim 就被当成「有正文的助手轮次」，界面上只留下一个孤儿「韭菜盒子」。
+ * 不 trim 就被当成「有正文的助手轮次」，界面上只留下一个孤儿「COMIC-BOX」。
  */
 function deepSeekVisibleText(content: unknown): string {
   return Array.isArray(content)
@@ -634,7 +635,7 @@ function deepSeekUserMessageId(event: any): string {
  * 官方把一轮看成「**一个过程节点 + 一个答案节点**」（`dsh-client-ui-chat` 的 `turn-process`
  * 定义）：答案取该轮**最后一条有正文且不含 tool-call 块**的 assistant 消息；其余有正文的消息
  * 是**过程叙述**。实测 turn 7 的三步就是 `'\n\n'` / `'\n\n'` / `'搞定 ✅'` —— 只有最后一步是
- * 答案。我们以前每步各出一条「韭菜盒子」，所以才会出现两个空行。
+ * 答案。我们以前每步各出一条「COMIC-BOX」，所以才会出现两个空行。
  */
 function deepSeekTurnMessages(
   snapshot: DeepSeekSessionSnapshot,
@@ -763,7 +764,7 @@ export function deepSeekSessionTurns(snapshot: DeepSeekSessionSnapshot): Convers
       id,
       role: 'assistant',
       // 只有答案有正文。纯工具轮**故意**留空 —— 它只是过程块的挂载点，
-      // 侧栏由 turnHasBody() 判掉，不会再出现孤儿的「韭菜盒子」。
+      // 侧栏由 turnHasBody() 判掉，不会再出现孤儿的「COMIC-BOX」。
       content: answer?.text || '',
       ...deepSeekDeliverables(snapshot.events || [], turn).length ? { deliverables: deepSeekDeliverables(snapshot.events || [], turn) } : {},
       createdAt: new Date(answer?.time || Number(event.time) || Date.now()).toISOString(),
@@ -1495,18 +1496,19 @@ async function createRuntime(input: DeepSeekHarnessInput): Promise<Runtime> {
       "  name: '@deepseek-ai/dsh-experimental-computer-use-cua-driver-native'",
     ])
     : []
-  await mkdir(routeDir, { recursive: true })
+  await invoke('dev_create_dir_external', { input: { path: routeDir } })
   // 不声明时官方默认就是纯文本（DEFAULT_INPUT = ["text"]），所以只有确实声明图片输入时才写这一行：
   // 显式写 [text] 没有信息增量，却会把 catalog 自带的模态一并抹掉。
   const modelInputLines = input.imageInput
     ? [`            input: ${JSON.stringify(deepSeekModelInput(true))}`]
     : []
-  await writeTextFile(patchPath, [
+  // 与项目文件服务同用原生写入口；root 固定为本应用、当前工作区的私有 Harness 目录。
+  await invoke('dev_write_file', { input: { root: routeDir, relativePath: 'route.cordis.yml', content: [
         '- id: llm-pi-ai',
         '  config:',
         '    providers:',
         '      jiucaihezi:',
-        '        displayName: 韭菜盒子',
+        '        displayName: COMIC-BOX',
         '        apiKeyEnv: JIUCAIHEZI_DH_API_KEY',
         `        api: ${api}`,
         `        baseURL: ${JSON.stringify(baseURL)}`,
@@ -1521,7 +1523,7 @@ async function createRuntime(input: DeepSeekHarnessInput): Promise<Runtime> {
         ...nativeToolPatch,
         ...fileReferencePatch,
         ...computerUsePatch,
-      ].join('\n'))
+      ].join('\n') } })
 
   const runtimeRoot = 'deepseek-harness/node_modules'
   const command = await resolveResource(
@@ -1821,13 +1823,6 @@ export async function updateDeepSeekHarnessQueue(
 }
 
 export async function runDeepSeekHarness(input: DeepSeekHarnessInput): Promise<string> {
-  const { beginDesktopUpdateTask } = await import('./desktopUpdater')
-  const release = await beginDesktopUpdateTask('AI 对话')
-  try { return await runDeepSeekHarnessTask(input) }
-  finally { await release() }
-}
-
-async function runDeepSeekHarnessTask(input: DeepSeekHarnessInput): Promise<string> {
   input = productionInput(input)
   if (input.signal?.aborted) throw new DOMException('Aborted', 'AbortError')
   const wireSessionId = deepSeekSessionId(input.sessionId, input.cwd)

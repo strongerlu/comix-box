@@ -75,7 +75,7 @@ onBeforeUnmount(() => { unmounted = true; stop?.(); window.removeEventListener('
     </div>
     <label class="setting-row copy-row"><div><strong>保存后自动复制</strong><p>另存为或保存到项目成功后，复制到剪贴板。</p></div><input v-model="settings.autoCopy" type="checkbox" :disabled="busy" @change="saveSettings"></label>
     <div class="directory-setting"><strong>默认保存目录</strong><div class="directory-row"><span :title="settings.directory">{{ settings.directory || '记住上次另存为的位置' }}</span><button :disabled="busy" @click="chooseDirectory">选择目录</button></div></div>
-    <div v-if="mac && !permission" class="permission" role="alert"><p>需要“屏幕录制”权限。授权后如仍失败，请重启韭菜盒子。</p><div class="permission-actions"><button @click="authorize">申请授权</button><button @click="openExternal('x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture')">打开系统设置</button></div></div>
+    <div v-if="mac && !permission" class="permission" role="alert"><p>需要“屏幕录制”权限。授权后如仍失败，请重启COMIC-BOX。</p><div class="permission-actions"><button @click="authorize">申请授权</button><button @click="openExternal('x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture')">打开系统设置</button></div></div>
     <div class="capture-row"><button class="primary" :disabled="busy || recording" @click="capture"><JcIcon name="photo_camera" />{{ busy ? '准备中…' : '截一张' }}</button><span>拖拽框选 · Esc 取消</span></div>
     <p v-if="status" class="setting-status" role="status">{{ status }}</p>
   </section>

@@ -141,7 +141,7 @@ export function buildHeaders(config: ApiConfig): Record<string, string> {
   }
   if (config.apiBase.includes('openrouter')) {
     headers['HTTP-Referer'] = window.location.href
-    headers['X-Title'] = '韭菜盒子'
+    headers['X-Title'] = 'COMIC-BOX'
   }
   return headers
 }

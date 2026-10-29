@@ -2247,25 +2247,10 @@ async fn open_in_file_manager_checked_impl(
 }
 
 fn open_in_file_manager_impl(path: &str) -> Result<(), String> {
-    #[cfg(target_os = "macos")]
-    {
-        std::process::Command::new("open")
-            .arg(path)
-            .spawn()
-            .map_err(|e| format!("Failed to open: {}", e))?;
-    }
 
     #[cfg(target_os = "windows")]
     {
         std::process::Command::new("explorer")
-            .arg(path)
-            .spawn()
-            .map_err(|e| format!("Failed to open: {}", e))?;
-    }
-
-    #[cfg(target_os = "linux")]
-    {
-        std::process::Command::new("xdg-open")
             .arg(path)
             .spawn()
             .map_err(|e| format!("Failed to open: {}", e))?;
@@ -4063,41 +4048,6 @@ mod tests {
         assert_eq!(result.unwrap(), "# platform-access");
     }
 
-    #[cfg(unix)]
-    #[tokio::test]
-    async fn test_read_file_by_path_rejects_symlink_escape() {
-        let tmp = TempDir::new().unwrap();
-        let pool = setup_test_db().await;
-        let central_dir = tmp.path().join("central");
-        fs::create_dir_all(&central_dir).unwrap();
-        set_agent_dir(&pool, "central", &central_dir).await;
-        create_central_skill(&pool, &central_dir, "central-access").await;
-        let outside_dir = tmp.path().join("outside");
-        fs::create_dir_all(&outside_dir).unwrap();
-        let outside_file = outside_dir.join("secret.md");
-        fs::write(&outside_file, "# secret").unwrap();
-        create_symlink(
-            &outside_file,
-            &central_dir.join("central-access").join("secret-link.md"),
-        )
-        .unwrap();
-
-        let result = read_file_by_path_impl(
-            &pool,
-            &central_dir
-                .join("central-access")
-                .join("secret-link.md")
-                .to_string_lossy(),
-            &file_context("central-access", None, None),
-        )
-        .await;
-
-        assert!(result.is_err());
-        assert!(result
-            .unwrap_err()
-            .contains("outside the allowed Skill directories"));
-    }
-
     #[tokio::test]
     async fn test_read_skill_resource_returns_binary_base64_and_mime() {
         let tmp = TempDir::new().unwrap();
@@ -4189,8 +4139,6 @@ mod tests {
         fs::write(&unsupported, "echo no").unwrap();
         let outside = tmp.path().join("outside.mjs");
         fs::write(&outside, "console.log('secret')").unwrap();
-        #[cfg(unix)]
-        create_symlink(&outside, &root.join("scripts").join("link.mjs")).unwrap();
 
         let unsupported_result = run_skill_script_impl(
             &pool,
@@ -4205,24 +4153,7 @@ mod tests {
         assert!(unsupported_result
             .unwrap_err()
             .contains("Only .py, .js, and .mjs"));
-        #[cfg(unix)]
-        {
-            let symlink_result = run_skill_script_impl(
-                &pool,
-                &RunSkillScriptInput {
-                    path: root
-                        .join("scripts")
-                        .join("link.mjs")
-                        .to_string_lossy()
-                        .into_owned(),
-                    context: file_context("script-safety", None, None),
-                    args: vec![],
-                    timeout_seconds: Some(20),
-                },
-            )
-            .await;
-            assert!(symlink_result.is_err());
-        }
+
     }
 
     #[tokio::test]
@@ -4328,41 +4259,6 @@ mod tests {
         )
         .await;
         assert!(result.is_err());
-    }
-
-    #[cfg(unix)]
-    #[tokio::test]
-    async fn test_list_skill_directory_skips_recursive_directory_symlink() {
-        let tmp = TempDir::new().unwrap();
-        let pool = setup_test_db().await;
-        let root = tmp.path().join("planning-with-files-zh");
-        fs::create_dir_all(&root).unwrap();
-        fs::write(root.join("SKILL.md"), "# Skill").unwrap();
-        create_symlink(&root, &root.join("planning-with-files-zh")).unwrap();
-        let skill = Skill {
-            id: "planning-with-files-zh".to_string(),
-            name: "Planning With Files".to_string(),
-            description: None,
-            file_path: root.join("SKILL.md").to_string_lossy().into_owned(),
-            canonical_path: Some(root.to_string_lossy().into_owned()),
-            is_central: true,
-            source: Some("native".to_string()),
-            content: None,
-            commands: None,
-            scanned_at: Utc::now().to_rfc3339(),
-        };
-        db::upsert_skill(&pool, &skill).await.unwrap();
-
-        let nodes = list_skill_directory_impl(
-            &pool,
-            &root.to_string_lossy(),
-            &file_context("planning-with-files-zh", None, None),
-        )
-        .await
-        .unwrap();
-
-        assert_eq!(nodes.len(), 1);
-        assert_eq!(nodes[0].name, "SKILL.md");
     }
 
     // ── open_in_file_manager ───────────────────────────────────────────────────

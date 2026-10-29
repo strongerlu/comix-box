@@ -14,7 +14,7 @@ Studio text sync -> /sync/* -> SYNC_DB
 ## Responsibilities
 
 - Serves an iframe-ready Studio homepage body for NewAPI's native homepage setting, favicon, landing images, and support/privacy/terms pages on the API host. `npm run deploy` synchronizes these files from the repository's current `index.html` and `public/` assets before deployment.
-- `POST /auth/login`: validates a NewAPI username/password, creates or reuses the user's `韭菜盒子工作台` token, and returns:
+- `POST /auth/login`: validates a NewAPI username/password, creates or reuses the user's `COMIC-BOX工作台` token, and returns:
 
 ```json
 {

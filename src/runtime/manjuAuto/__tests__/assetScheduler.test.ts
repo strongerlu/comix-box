@@ -11,7 +11,7 @@ import {
   type EpisodeCheckpoint,
 } from '../assetScheduler'
 
-type FakeTask = { status: 'pending' | 'running' | 'success' | 'failed' | 'cancelled'; localPath?: string; error?: string }
+type FakeTask = { status: 'pending' | 'running' | 'success' | 'failed' | 'cancelled'; localPath?: string; error?: string; submissionUncertain?: boolean }
 
 function fakeDeps(files: Record<string, string> = {}) {
   const fs = new Map(Object.entries(files))
@@ -51,6 +51,41 @@ const prompts = {
 }
 const registry = (fs: Map<string, string>) => JSON.parse(fs.get(`${wiki}/${ASSET_REGISTRY_PATH}`)!).assets
 
+test('review exposes missing uncertain assets for explicit replacement without another automatic POST', async () => {
+  const { deps, tasks, submits } = fakeDeps(prompts)
+  await submitEpisodeAssets(wiki, checkpoint(), deps)
+  tasks.set('t1', { status: 'success', localPath: '/out/person.png' })
+  tasks.set('t2', { status: 'failed', submissionUncertain: true })
+  const result = await awaitEpisodeAssets(wiki, checkpoint(), deps, { timeoutMs: 10, pollMs: 1, review: true })
+  assert.equal(result.status, 'awaiting_review')
+  assert.deepEqual(result.failed, ['场景/石道'])
+  assert.deepEqual(result.review.sort(), ['场景/石道', '角色/莫甘娜'])
+  assert.deepEqual(result.images, { '角色/莫甘娜': '/out/person.png' })
+  assert.equal(submits.length, 2)
+})
+
+test('approval cannot lock incomplete assets, including when a caller bypasses the UI', async () => {
+  const { deps, fs } = fakeDeps(prompts)
+  await submitEpisodeAssets(wiki, checkpoint(), deps)
+  await assert.rejects(() => lockAssets(wiki, ['角色/莫甘娜', '场景/石道'], deps), /资产.*未就绪/)
+  assert.equal(registry(fs)['角色/莫甘娜'].status, 'pending')
+  assert.equal(registry(fs)['场景/石道'].status, 'pending')
+})
+
+test('late recovery of an uncertain asset reuses its original result without a new POST', async () => {
+  const { deps, fs, tasks, submits } = fakeDeps(prompts)
+  await submitEpisodeAssets(wiki, checkpoint(), deps)
+  tasks.set('t1', { status: 'failed', submissionUncertain: true })
+  tasks.set('t2', { status: 'success', localPath: '/out/scene.png' })
+  assert.equal((await awaitEpisodeAssets(wiki, checkpoint(), deps, { timeoutMs: 10, pollMs: 1 })).status, 'failed')
+  assert.equal(registry(fs)['角色/莫甘娜'].status, 'uncertain')
+  tasks.set('t1', { status: 'success', localPath: '/out/recovered.png' })
+  const recovered = await awaitEpisodeAssets(wiki, checkpoint(), deps, { timeoutMs: 10, pollMs: 1 })
+  assert.equal(recovered.status, 'ready')
+  assert.equal(recovered.images['角色/莫甘娜'], '/out/recovered.png')
+  assert.equal(submits.length, 2)
+})
+
 test('submits each registered asset once without waiting, using the prompt body', async () => {
   const { deps, fs, submits } = fakeDeps(prompts)
   await submitEpisodeAssets(wiki, checkpoint(), deps)
@@ -75,11 +110,14 @@ test('persisted registry prevents re-submitting after restart and reuses assets 
 })
 
 test('changed prompt hash resubmits, but locked assets are never regenerated', async () => {
-  const { deps, fs, submits } = fakeDeps(prompts)
+  const { deps, fs, submits, tasks } = fakeDeps(prompts)
   await submitEpisodeAssets(wiki, checkpoint(1), deps)
   await submitEpisodeAssets(wiki, checkpoint(2, 'c'.repeat(64)), deps)
   assert.equal(submits.length, 3)
   assert.equal(registry(fs)['角色/莫甘娜'].attempts, 1, '新版本提示词重新计数')
+  tasks.set('t3', { status: 'success', localPath: '/p/person.png' })
+  tasks.set('t2', { status: 'success', localPath: '/p/scene.png' })
+  await awaitEpisodeAssets(wiki, checkpoint(2, 'c'.repeat(64)), deps, { timeoutMs: 10, pollMs: 1 })
   await lockAssets(wiki, ['角色/莫甘娜'], deps)
   await submitEpisodeAssets(wiki, checkpoint(3, 'd'.repeat(64)), deps)
   assert.equal(submits.length, 3)
@@ -145,14 +183,15 @@ test('review gate pauses once all images are ready until they are locked', async
   assert.deepEqual(ready.images, { '角色/莫甘娜': '/p/a.png', '场景/石道': '/p/b.png' })
 })
 
-test('a lost task (not found after restart) is resubmitted as a retry', async () => {
-  const { deps, tasks, submits } = fakeDeps(prompts)
+test('a missing task after restart blocks until the original request is checked', async () => {
+  const { deps, fs, tasks, submits } = fakeDeps(prompts)
   await submitEpisodeAssets(wiki, checkpoint(), deps)
-  tasks.clear()
-  deps.sleep = async () => { for (const id of tasks.keys()) tasks.set(id, { status: 'success', localPath: `/p/${id}.png` }) }
+  tasks.delete('t1')
+  tasks.set('t2', { status: 'success', localPath: '/p/b.png' })
   const result = await awaitEpisodeAssets(wiki, checkpoint(), deps, { timeoutMs: 1000, pollMs: 1 })
-  assert.equal(result.status, 'ready')
-  assert.equal(submits.length, 4)
+  assert.equal(result.status, 'failed')
+  assert.equal(submits.length, 2)
+  assert.equal(registry(fs)['角色/莫甘娜'].status, 'uncertain')
 })
 
 test('assets that finally failed get a fresh retry series on the next run (e.g. after switching image model)', async () => {
@@ -197,16 +236,17 @@ test('retrying a finally-failed asset on a later run never reuses an earlier req
   assert.equal(new Set(ids).size, ids.length)
 })
 
-test('interrupted tasks (nobody tracking them after an app restart) resubmit immediately without using attempts', async () => {
+test('interrupted tasks block instead of resubmitting an uncertain paid request', async () => {
   const { deps, fs, tasks, submits } = fakeDeps(prompts)
   await submitEpisodeAssets(wiki, checkpoint(), deps)
   tasks.set('t1', { status: 'interrupted' })
   tasks.set('t2', { status: 'success', localPath: '/p/b.png' })
-  deps.sleep = async () => { tasks.set('t3', { status: 'success', localPath: '/p/a.png' }) }
   const result = await awaitEpisodeAssets(wiki, checkpoint(), deps, { timeoutMs: 1000, pollMs: 1 })
-  assert.equal(result.status, 'ready')
-  assert.equal(submits.length, 3)
-  assert.equal(registry(fs)['角色/莫甘娜'].attempts, 1)
+  assert.equal(result.status, 'failed')
+  assert.equal(submits.length, 2)
+  assert.equal(registry(fs)['角色/莫甘娜'].status, 'uncertain')
+  await submitEpisodeAssets(wiki, checkpoint(), deps)
+  assert.equal(submits.length, 2, 'resuming must not bypass uncertainty')
 })
 
 test('regenerating one asset during review resubmits only that asset, with a fresh requestId and optional new prompt hash', async () => {
@@ -231,8 +271,11 @@ test('regenerating one asset during review resubmits only that asset, with a fre
 })
 
 test('regenerating a locked asset is refused so approved images stay stable', async () => {
-  const { deps } = fakeDeps(prompts)
+  const { deps, tasks } = fakeDeps(prompts)
   await submitEpisodeAssets(wiki, checkpoint(), deps)
+  tasks.set('t1', { status: 'success', localPath: '/p/person.png' })
+  tasks.set('t2', { status: 'success', localPath: '/p/scene.png' })
+  await awaitEpisodeAssets(wiki, checkpoint(), deps, { timeoutMs: 10, pollMs: 1 })
   await lockAssets(wiki, ['角色/莫甘娜'], deps)
   await assert.rejects(regenerateAsset(wiki, '角色/莫甘娜', deps), /已锁定/)
 })
@@ -291,4 +334,36 @@ test('regenerating a costume during review also redoes the looks built from it',
   assert.equal(fusions.length, 2)
   assert.deepEqual(fusions[1].images, ['/p/t1.png', '/p/t4.png'], '用新服装图重新融合')
   assert.equal(look, '/p/t5.png')
+})
+
+
+test('a failed submit response is recorded before POST and resumes by requestId without a second POST', async () => {
+  const { deps, fs, tasks, submits } = fakeDeps(prompts)
+  const original = deps.submitImage
+  let attempted = false
+  deps.submitImage = async input => {
+    const persisted = Object.values(registry(fs)).find((entry: any) => entry.request_id === input.requestId)
+    assert.ok(persisted, 'request identity must be durable before submit')
+    if (!attempted) { attempted = true; await original(input); throw Error('response lost') }
+    return original(input)
+  }
+  await assert.rejects(submitEpisodeAssets(wiki, checkpoint(), deps), /response lost/)
+  deps.findTask = async requestId => submits.findIndex(s => s.requestId === requestId) === 0 ? 't1' : undefined
+  tasks.set('t1', { status: 'success', localPath: '/p/a.png' })
+  deps.sleep = async () => { tasks.set('t2', { status: 'success', localPath: '/p/b.png' }) }
+  const gate = await awaitEpisodeAssets(wiki, checkpoint(), deps, { timeoutMs: 1000, pollMs: 1 })
+  assert.equal(gate.status, 'ready')
+  assert.equal(submits.length, 2)
+  assert.equal(registry(fs)['角色/莫甘娜'].task_id, 't1')
+})
+
+test('a failed task with uncertain submission stays blocked across a new automatic run', async () => {
+  const { deps, fs, tasks, submits } = fakeDeps(prompts)
+  await submitEpisodeAssets(wiki, checkpoint(), deps)
+  tasks.set('t1', { status: 'failed', error: 'signal is aborted without reason', submissionUncertain: true })
+  tasks.set('t2', { status: 'success', localPath: '/p/b.png' })
+  assert.equal((await awaitEpisodeAssets(wiki, checkpoint(), deps, { timeoutMs: 1000, pollMs: 1 })).status, 'failed')
+  assert.equal(submits.length, 2)
+  await submitEpisodeAssets(wiki, checkpoint(), deps)
+  assert.equal(submits.length, 2)
 })

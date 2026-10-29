@@ -1,6 +1,6 @@
 # JC Cloud Login Component
 
-韭菜盒子云端账号的一键登录组件，可复制到其他 Vue 3 项目中使用。
+COMIC-BOX云端账号的一键登录组件，可复制到其他 Vue 3 项目中使用。
 
 ## 文件
 

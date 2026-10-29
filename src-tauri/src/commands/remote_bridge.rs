@@ -590,17 +590,10 @@ fn listener_addresses(ips: &[String], bonjour: Option<&str>, port: u16) -> Vec<S
 
 /// 局域网里不随 DHCP 变的名字。macOS 取 Bonjour 名；Windows 10+ 也会应答 `计算机名.local`。
 fn bonjour_host() -> Option<String> {
-    #[cfg(target_os = "macos")]
-    let name = std::process::Command::new("scutil")
-        .args(["--get", "LocalHostName"])
-        .output()
-        .ok()
-        .filter(|output| output.status.success())
-        .map(|output| String::from_utf8_lossy(&output.stdout).trim().to_string());
+
     #[cfg(target_os = "windows")]
     let name = std::env::var("COMPUTERNAME").ok();
-    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
-    let name: Option<String> = None;
+
     name.filter(|value| {
         !value.is_empty() && value.chars().all(|c| c.is_ascii_alphanumeric() || c == '-')
     })

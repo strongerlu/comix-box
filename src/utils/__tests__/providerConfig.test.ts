@@ -63,7 +63,7 @@ test('updateDefaultProviderModels persists model ownership without exposing host
   store.set('jcProviders', JSON.stringify([
     {
       id: DEFAULT_PROVIDER_ID,
-      name: '韭菜盒子',
+      name: 'COMIC-BOX',
       type: 'new-api',
       apiKey: 'sk-one',
       apiHost: 'https://attacker.example/v1',

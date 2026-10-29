@@ -132,7 +132,7 @@ function buildConfigText(apiKey: string, models: { id: string; label: string }[]
     ? models.map(m => `  - ${m.id}`).join('\n')
     : `  - ${props.model || 'claude-sonnet-4-6'}`
   const count = models.length || 1
-  return `韭菜盒子 API 配置
+  return `COMIC-BOX API 配置
 
 接口地址
 ${base}
@@ -269,14 +269,6 @@ function closeConfigDialog() {
         <JcIcon name="key" />
         管理密钥
       </button>
-      <button class="jc-login-link" @click="open(`${normalizedApiBase}/wallet`)">
-        <JcIcon name="group_add" />
-        邀请赚米
-      </button>
-      <button class="jc-login-link" @click="open(`${normalizedApiBase}/profile`)">
-        <JcIcon name="event_available" />
-        白嫖签到
-      </button>
     </div>
 
     <button class="jc-login-save" :disabled="busy" @click="emit('save-key')">
@@ -291,7 +283,7 @@ function closeConfigDialog() {
 
     <div v-if="loginDialogOpen" class="jc-login-overlay" @mousedown.self="closeLoginDialog">
       <div class="jc-login-dialog">
-        <div class="jc-login-dialog-title">登录韭菜盒子账号</div>
+        <div class="jc-login-dialog-title">登录COMIC-BOX账号</div>
         <input v-model="loginUsername" class="jc-login-input" autocomplete="username" placeholder="账号 / 邮箱" />
         <input
           v-model="loginPassword"

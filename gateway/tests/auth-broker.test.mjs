@@ -41,7 +41,7 @@ test('auth login returns an ordinary NewAPI key plus a dedicated sync session', 
       });
     }
     if (String(url).includes('/api/token/?')) {
-      return Response.json({ success: true, data: [{ id: 701, name: '韭菜盒子工作台', group: 'auto', status: 1 }] });
+      return Response.json({ success: true, data: [{ id: 701, name: 'COMIC-BOX工作台', group: 'auto', status: 1 }] });
     }
     if (String(url).endsWith('/api/token/701/key')) {
       return Response.json({ success: true, data: { key: 'sk-existing-workbench-key' } });
@@ -147,8 +147,8 @@ test('auth login ignores a same-name token outside the auto group', async () => 
       return Response.json({
         success: true,
         data: [
-          { id: 700, name: '韭菜盒子工作台', group: 'site_member', status: 1 },
-          { id: 701, name: '韭菜盒子工作台', group: 'auto', status: 1 }
+          { id: 700, name: 'COMIC-BOX工作台', group: 'site_member', status: 1 },
+          { id: 701, name: 'COMIC-BOX工作台', group: 'auto', status: 1 }
         ]
       });
     }
@@ -186,11 +186,11 @@ test('auth login creates and reads a workbench key when none exists', async () =
     }
     if (String(url).includes('/api/token/?')) {
       if (!listedAfterCreate) return Response.json({ success: true, data: [] });
-      return Response.json({ success: true, data: [{ id: 702, name: '韭菜盒子工作台', group: 'auto', status: 1 }] });
+      return Response.json({ success: true, data: [{ id: 702, name: 'COMIC-BOX工作台', group: 'auto', status: 1 }] });
     }
     if (String(url).endsWith('/api/token/')) {
       const body = JSON.parse(String(init.body || '{}'));
-      assert.equal(body.name, '韭菜盒子工作台');
+      assert.equal(body.name, 'COMIC-BOX工作台');
       assert.equal(body.group, 'auto');
       listedAfterCreate = true;
       return Response.json({ success: true, data: { id: 702 } });

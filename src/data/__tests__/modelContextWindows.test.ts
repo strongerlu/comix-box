@@ -10,9 +10,10 @@ test('cloud models use the unified defaults without inferring capacity from free
   }
   assert.equal(getModelContextWindow('qwen3.8:9b-q5', 'local-ollama'), 262_144)
   assert.equal(getModelContextWindow('openai/gpt-oss-120b:free', 'openrouter'), 1_000_000)
-  assert.equal(getModelMaxOutputTokens('claude-sonnet-4-6', 'jiucaihezi'), 128_000)
+  assert.equal(getModelMaxOutputTokens('claude-sonnet-4-6', 'jiucaihezi'), 32_768)
   assert.equal(getModelMaxOutputTokens('gpt-5', 'local-ollama'), 32_768)
-  assert.equal(getModelMaxOutputTokens('openai/gpt-oss-120b:free', 'openrouter'), 128_000)
+  assert.equal(getModelMaxOutputTokens('openai/gpt-oss-120b:free', 'openrouter'), 32_768)
+  assert.ok(getModelMaxOutputTokens('claude-haiku-4-5-20251001', 'jiucaihezi') <= 64_000)
 })
 
 

@@ -8,7 +8,7 @@ test('native Wiki resources preserve all existing rules without publishing a Ski
   const tools = new Map(), sections = new Map()
   const releases = []
   const ctx = {
-    tools: { register(tool) { tools.set(tool.name, tool); return () => tools.delete(tool.name) } },
+    tools: { guard() { return () => {} }, register(tool) { tools.set(tool.name, tool); return () => tools.delete(tool.name) } },
     systemPrompt: { section(section) { sections.set(section.name, section); return () => sections.delete(section.name) } },
     fs: {}, get() {}, effect(fn) { releases.push(fn()) },
   }

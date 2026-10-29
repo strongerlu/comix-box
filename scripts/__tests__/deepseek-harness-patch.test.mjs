@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import { execFileSync } from 'node:child_process'
 import { existsSync, readdirSync, readFileSync, mkdtempSync, mkdirSync, writeFileSync, copyFileSync, rmSync, statSync, utimesSync } from 'node:fs'
-import { join } from 'node:path'
+import { join, sep } from 'node:path'
 import { tmpdir } from 'node:os'
 import { test } from 'node:test'
 
@@ -21,7 +21,7 @@ const apply = () => execFileSync(process.execPath, ['scripts/prepare-deepseek-ha
 test('the Harness vendor patch is idempotent and carries the permission request', t => {
   if (!existsSync(serverPath)) return t.skip('bundled Harness SDK is not installed')
   apply()
-  const productionPaths = ['dsh-tool-fs-search', 'dsh-goal-round-driver', 'dsh-agent-loop'].map(pkg => serverPath.replace('dsh-sdk-jsonrpc-server', pkg))
+  const productionPaths = ['dsh-tool-fs-search', 'dsh-goal-round-driver', 'dsh-agent-loop', 'dsh-tool-skill'].map(pkg => serverPath.replace('dsh-sdk-jsonrpc-server', pkg))
   const productionOnce = productionPaths.map(file => readFileSync(file, 'utf8'))
   const once = readFileSync(serverPath, 'utf8')
   apply()
@@ -93,7 +93,7 @@ test('Harness installs dependent session methods on a fresh SDK layout', t => {
     for (const pkg of ['dsh-sdk-client', 'dsh-sdk-jsonrpc-server', 'dsh-skill']) mkdirSync(join(sdk, pkg, 'lib'), { recursive: true })
     copyFileSync('scripts/prepare-deepseek-harness.mjs', join(root, 'scripts/prepare-deepseek-harness.mjs'))
     copyFileSync('src-tauri/resources/deepseek-harness/package.json', join(harness, 'package.json'))
-    copyFileSync(serverPath.replace('dsh-sdk-jsonrpc-server/lib/index.js', 'dsh-sdk-client/package.json'), join(sdk, 'dsh-sdk-client/package.json'))
+    copyFileSync(serverPath.replace(['dsh-sdk-jsonrpc-server', 'lib', 'index.js'].join(sep), ['dsh-sdk-client', 'package.json'].join(sep)), join(sdk, 'dsh-sdk-client/package.json'))
     copyFileSync(serverPath.replace('dsh-sdk-jsonrpc-server', 'dsh-sdk-client'), join(sdk, 'dsh-sdk-client/lib/index.js'))
     writeFileSync(join(harness, 'node_modules/node/bin', process.platform === 'win32' ? 'node.exe' : 'node'), '')
     let source = readFileSync(serverPath, 'utf8').replace('source: { kind: "user", ...productionSource(params, rec.handle.agent) }', 'source: { kind: "user" }')
@@ -101,12 +101,15 @@ test('Harness installs dependent session methods on a fresh SDK layout', t => {
       source = source.replace(new RegExp(`\\tasync ${method}\\(params\\) \{[\\s\\S]*?(?=\\t(?:async |assertLiveAgent\\())`), '')
     }
     copyFileSync(serverPath.replace('dsh-sdk-jsonrpc-server', 'dsh-skill'), join(sdk, 'dsh-skill/lib/index.js'))
-    for (const pkg of ['dsh-tool-fs-search', 'dsh-goal-round-driver', 'dsh-agent-loop']) {
+    for (const pkg of ['dsh-tool-fs-search', 'dsh-goal-round-driver', 'dsh-agent-loop', 'dsh-tool-skill']) {
       mkdirSync(join(sdk, pkg, 'lib'), { recursive: true })
       const original = readFileSync(serverPath.replace('dsh-sdk-jsonrpc-server', pkg), 'utf8')
         .replace(/^import \{ (?:productionSearchArguments|productionGoalAllowed|prepareProductionStep) \} from .*;\n/gm, '')
         .replace(/\n\targv = await productionSearchArguments\(exec.agent, argv, workdir\);/, '')
         .replaceAll('productionGoalAllowed(state.agent) && ', '')
+        .replace('messages: [...injections, ...decision.messages]', 'messages: [...decision.messages, ...injections]')
+        .replace('existing === void 0 ? [catalog, ...decision.messages]', 'existing === void 0 ? [...decision.messages, catalog]')
+        .replace('messages: context === void 0 ? claimed : [context, ...claimed]', 'messages: context === void 0 ? claimed : [...claimed, context]')
         .replace(/\t\tconst nextStepCount = this.inbox.nextStep.length;[\s\S]*?(?=\n\t\tsignal.throwIfAborted\(\);)/, '\t\tconst claimed = this.inbox.claim(target, position.turn);\n\t\tconst assembly = await this.loopCtx.systemPrompt.assemble(assembleContextFor(this, signal));')
         .replace(/await prepareProductionStep\(this, claimed, signal\);\n\t\t/, '')
       writeFileSync(join(sdk, pkg, 'lib/index.js'), original)
@@ -119,7 +122,7 @@ test('Harness installs dependent session methods on a fresh SDK layout', t => {
     assert.ok(once.includes('...productionSource(params, rec.handle.agent)'))
     for (const [pkg, hook] of [['dsh-tool-fs-search', 'argv = await productionSearchArguments'], ['dsh-goal-round-driver', 'productionGoalAllowed(state.agent) &&'], ['dsh-agent-loop', 'await prepareProductionStep(this, claimed, signal)']]) assert.ok(readFileSync(join(sdk, pkg, 'lib/index.js'), 'utf8').includes(hook))
     for (const method of ['cancelSession', 'updateQueue', 'permission', 'approval']) assert.ok(once.includes(`async ${method}(params)`), method)
-    const files = ['dsh-sdk-client', 'dsh-sdk-jsonrpc-server', 'dsh-skill', 'dsh-tool-fs-search', 'dsh-goal-round-driver', 'dsh-agent-loop']
+    const files = ['dsh-sdk-client', 'dsh-sdk-jsonrpc-server', 'dsh-skill', 'dsh-tool-fs-search', 'dsh-goal-round-driver', 'dsh-agent-loop', 'dsh-tool-skill']
       .map(pkg => join(sdk, pkg, 'lib/index.js'))
     // 固定到过去，避免文件系统时间精度把无效重写漏判为幂等。
     for (const file of files) utimesSync(file, 1_000, 1_000)

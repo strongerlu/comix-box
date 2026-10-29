@@ -1,6 +1,6 @@
 # 新手教程
 
-## 韭菜盒子 Web 端生图生视频步骤
+## COMIC-BOX Web 端生图生视频步骤
 
 ![步骤1](images/img_image1.jpg)
 
@@ -88,7 +88,7 @@
 
 ## 报错问题
 
-1. 把报错截图发给韭菜盒子 Studio，大部分问题能解决
+1. 把报错截图发给COMIC-BOX，大部分问题能解决
 
    ![报错1](images/img_image14.jpg)
 
@@ -112,13 +112,13 @@
 
 > 下面这份可以直接发给用户。
 
-### 韭菜盒子 API Key 使用攻略
+### COMIC-BOX API Key 使用攻略
 
 适用于：Claude Code / Codex
 
 ### 一、你需要准备什么
 
-你需要先注册/登录韭菜盒子账号，并获得一个专属 API Key。这个 Key 用于统一计费，请不要发给别人。
+你需要先注册/登录COMIC-BOX账号，并获得一个专属 API Key。这个 Key 用于统一计费，请不要发给别人。
 
 ### 二、配置 Claude Code
 
@@ -135,7 +135,7 @@ mkdir -p ~/.claude
 cat > ~/.claude/settings.json <<'EOF'
 {
   "env": {
-    "ANTHROPIC_AUTH_TOKEN": "把这里换成你的韭菜盒子APIKey",
+    "ANTHROPIC_AUTH_TOKEN": "把这里换成你的COMIC-BOXAPIKey",
     "ANTHROPIC_BASE_URL": "https://api.jiucaihezi.studio",
     "ANTHROPIC_MODEL": "claude-sonnet-4-6",
     "ANTHROPIC_DEFAULT_SONNET_MODEL": "claude-sonnet-4-6",
@@ -147,7 +147,7 @@ cat > ~/.claude/settings.json <<'EOF'
 EOF
 ```
 
-把 `"把这里换成你的韭菜盒子APIKey"` 替换成你自己的 Key。
+把 `"把这里换成你的COMIC-BOXAPIKey"` 替换成你自己的 Key。
 
 **3. 启动 Claude Code**
 
@@ -182,11 +182,11 @@ EOF
 **2. 写入你的 API Key**
 
 ```bash
-echo 'export OPENAI_API_KEY="把这里换成你的韭菜盒子APIKey"' >> ~/.zshrc
+echo 'export OPENAI_API_KEY="把这里换成你的COMIC-BOXAPIKey"' >> ~/.zshrc
 source ~/.zshrc
 ```
 
-把 `把这里换成你的韭菜盒子APIKey` 替换成你自己的 Key。
+把 `把这里换成你的COMIC-BOXAPIKey` 替换成你自己的 Key。
 
 **3. 打开 Codex App**
 
@@ -213,7 +213,7 @@ codex
 
 检查 `~/.claude/settings.json` 里的模型名是否是 `"claude-sonnet-4-6"`
 
-**2. Codex 没有走韭菜盒子 API**
+**2. Codex 没有走COMIC-BOX API**
 
 检查 `~/.codex/config.toml`：
 - `base_url = "https://api.jiucaihezi.studio/v1"`

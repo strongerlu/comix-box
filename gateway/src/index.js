@@ -51,7 +51,7 @@ async function handleLogout(request, env) {
 
 async function handleDeleteAccount(request, env) {
   const user = await getSessionUser(request, env);
-  if (!user || user.authProvider !== 'web') throw unauthorized('请重新登录韭菜盒子账号');
+  if (!user || user.authProvider !== 'web') throw unauthorized('请重新登录COMIC-BOX账号');
   await deleteSyncUserData(env, user.id);
   await deleteLegacyWebAccount(env, user);
   await deleteGatewayUserMirror(env, request, user);
@@ -104,7 +104,8 @@ function buildDesktopDeepLink(redirect, state, apiKey) {
 
 function buildMcpOAuthDeepLink(serverId, request) {
   const url = new URL(request.url);
-  const callback = new URL('jiucaihezi://mcp/oauth/callback');
+  const scheme = (url.searchParams.get('state') || '').startsWith('comic-box_') ? 'comic-box' : 'jiucaihezi';
+  const callback = new URL(`${scheme}://mcp/oauth/callback`);
   callback.searchParams.set('server', serverId);
   for (const key of ['code', 'state', 'error', 'error_description']) {
     const value = url.searchParams.get(key);
@@ -180,7 +181,7 @@ function desktopAuthBridgeHtml({ tokenUrl, signInUrl }) {
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>韭菜盒子登录</title>
+  <title>COMIC-BOX登录</title>
   <style>
     :root { color-scheme: light; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
     body { margin: 0; min-height: 100vh; background: #f6f7f2; color: #1f2a21; }
@@ -200,15 +201,15 @@ function desktopAuthBridgeHtml({ tokenUrl, signInUrl }) {
 <body>
   <div class="bar">
     <div>
-      <div class="title">韭菜盒子桌面登录</div>
+      <div class="title">COMIC-BOX桌面登录</div>
       <div id="status" class="status">请在下方完成网页账号登录，完成后会自动返回 App。</div>
     </div>
   </div>
   <div id="actions" class="actions">
     <button id="authorize" type="button">授权桌面端登录</button>
-    <span id="authorizeHint" class="hint">检测到网页登录状态，请确认授权韭菜盒子桌面端使用你的账号。</span>
+    <span id="authorizeHint" class="hint">检测到网页登录状态，请确认授权COMIC-BOX桌面端使用你的账号。</span>
   </div>
-  <iframe id="signin" class="frame" src="${escapeHtml(signInUrl)}" title="韭菜盒子网页登录"></iframe>
+  <iframe id="signin" class="frame" src="${escapeHtml(signInUrl)}" title="COMIC-BOX网页登录"></iframe>
   <div id="fallback" class="fallback">
     如果登录页没有显示，请 <a id="signinLink" rel="noreferrer">打开登录页</a>，登录完成后回到此页等待自动返回。
   </div>
@@ -278,7 +279,7 @@ function desktopAuthBridgeHtml({ tokenUrl, signInUrl }) {
         const deepLink = await createDesktopKeyFromWebSession();
         returned = true;
         statusEl.textContent = '登录成功，正在返回 App...';
-        authorizeHintEl.textContent = '授权成功，正在打开韭菜盒子。';
+        authorizeHintEl.textContent = '授权成功，正在打开COMIC-BOX。';
         window.location.href = deepLink;
       } catch (err) {
         authorizeEl.disabled = false;
@@ -349,7 +350,7 @@ function validateDesktopAuthParams(state, redirect) {
   } catch {
     throw badRequest('登录回调地址无效');
   }
-  const isDesktopDeepLink = redirectUrl.protocol === 'jiucaihezi:' && redirectUrl.hostname === 'auth' && redirectUrl.pathname === '/callback';
+  const isDesktopDeepLink = ['jiucaihezi:', 'comic-box:'].includes(redirectUrl.protocol) && redirectUrl.hostname === 'auth' && redirectUrl.pathname === '/callback';
   const isTauriDev = redirectUrl.protocol === 'tauri:' && redirectUrl.hostname === 'localhost';
   if (!isDesktopDeepLink && !isTauriDev) throw badRequest('登录回调地址不受信任');
   return { state, redirect: redirectUrl.href };
@@ -422,8 +423,8 @@ const LANDING_ASSETS = new Set([
   'IMG_5111.JPG',
   'douyinerweima.jpg',
   'guanfangweixin.jpg',
-  '韭菜盒子_0.1.6_aarch64.dmg',
-  '韭菜盒子_0.1.6_x64.dmg',
+  'COMIC-BOX_0.1.6_aarch64.dmg',
+  'COMIC-BOX_0.1.6_x64.dmg',
   'IMG_5114.webp',
   'IMG_5107.webp',
   'IMG_5110.webp',

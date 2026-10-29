@@ -961,8 +961,7 @@ mod tests {
     use super::*;
     use std::fs;
     // Windows 创建符号链接需要管理员权限或开发者模式，这些用例只在 unix 上有意义。
-    #[cfg(unix)]
-    use std::os::unix::fs::symlink;
+
     use tempfile::TempDir;
 
     /// `dir_path` / `file_path` 存的是本机原生路径（Windows 上是 `\`）。断言里统一折成正斜杠，
@@ -1149,41 +1148,6 @@ mod tests {
         assert!(target.is_none());
     }
 
-    #[cfg(unix)]
-    #[test]
-    fn test_detect_link_type_symlink() {
-        let tmp = TempDir::new().unwrap();
-
-        // Create a real target directory
-        let target_dir = tmp.path().join("target-skill");
-        fs::create_dir_all(&target_dir).unwrap();
-
-        // Create a symlink pointing to it
-        let link_path = tmp.path().join("linked-skill");
-        symlink(&target_dir, &link_path).expect("failed to create symlink");
-
-        let (kind, sym_target) = detect_link_type(&link_path, false);
-        assert_eq!(kind, "symlink");
-        assert!(
-            sym_target.is_some(),
-            "symlink target path should be returned"
-        );
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn test_detect_link_type_symlink_is_symlink_regardless_of_is_central() {
-        let tmp = TempDir::new().unwrap();
-        let target_dir = tmp.path().join("target");
-        fs::create_dir_all(&target_dir).unwrap();
-        let link_path = tmp.path().join("link");
-        symlink(&target_dir, &link_path).unwrap();
-
-        // Even in central context, a symlink is a symlink
-        let (kind, _) = detect_link_type(&link_path, true);
-        assert_eq!(kind, "symlink");
-    }
-
     // ── scan_directory ────────────────────────────────────────────────────────
 
     #[test]
@@ -1301,31 +1265,6 @@ mod tests {
         assert!(skills[0].is_central);
     }
 
-    #[cfg(unix)]
-    #[test]
-    fn test_scan_directory_detects_symlinked_skill() {
-        let tmp = TempDir::new().unwrap();
-        let skills_dir = tmp.path().join("agent-skills");
-        fs::create_dir_all(&skills_dir).unwrap();
-
-        // Create a real skill in another location (central-like)
-        let central_dir = tmp.path().join("central");
-        create_skill_dir(
-            &central_dir,
-            "my-skill",
-            &valid_skill_md("My Skill", "desc"),
-        );
-
-        // Symlink it into the agent skills dir
-        let link = skills_dir.join("my-skill");
-        symlink(central_dir.join("my-skill"), &link).unwrap();
-
-        let skills = scan_directory(&skills_dir, false);
-        assert_eq!(skills.len(), 1);
-        assert_eq!(skills[0].link_type, "symlink");
-        assert!(skills[0].symlink_target.is_some());
-    }
-
     #[test]
     fn test_scan_directory_nonexistent_dir_returns_empty() {
         let result = scan_directory(Path::new("/nonexistent/path/skills"), false);
@@ -1366,36 +1305,6 @@ mod tests {
         assert!(
             as_posix(&skills[1].dir_path).contains("mlops/evaluation/weights-and-biases")
         );
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn test_scan_skill_root_follows_symlinked_bundle_without_looping() {
-        let tmp = TempDir::new().unwrap();
-        let root = tmp.path().join("root");
-        let target = tmp.path().join("target-skills");
-        fs::create_dir_all(&root).unwrap();
-        create_skill_dir(
-            &target,
-            "using-superpowers",
-            &valid_skill_md("Using Superpowers", "Symlinked bundle skill"),
-        );
-        symlink(&target, root.join("superpowers")).unwrap();
-        symlink(&root, target.join("loop-back")).unwrap();
-
-        let skills = scan_skill_root(
-            &root,
-            true,
-            ScanDirectoryOptions {
-                nested: true,
-                max_depth: 4,
-                follow_symlinks: true,
-            },
-        );
-
-        assert_eq!(skills.len(), 1);
-        assert_eq!(skills[0].id, "using-superpowers");
-        assert!(skills[0].is_central);
     }
 
     #[test]

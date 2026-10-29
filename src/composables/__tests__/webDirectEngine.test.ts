@@ -40,7 +40,7 @@ test('readChatCompletionResponse streams text and accumulates tool calls', async
       JSON.stringify({ choices: [{ delta: { content: '你' } }] }),
       JSON.stringify({ choices: [{ delta: { content: '好' } }] }),
       JSON.stringify({ choices: [{ delta: { tool_calls: [{ index: 0, id: 'call_1', function: { name: 'wiki_search', arguments: '{"query":"' } }] } }] }),
-      JSON.stringify({ choices: [{ delta: { tool_calls: [{ index: 0, function: { arguments: '韭菜盒子"}' } }] } }] }),
+      JSON.stringify({ choices: [{ delta: { tool_calls: [{ index: 0, function: { arguments: 'COMIC-BOX"}' } }] } }] }),
       '[DONE]',
     ]),
     value => seen.push(value),
@@ -51,7 +51,7 @@ test('readChatCompletionResponse streams text and accumulates tool calls', async
   assert.deepEqual(seen, ['你', '你好'])
   assert.equal(toolCalls[0].id, 'call_1')
   assert.equal(toolCalls[0].function.name, 'wiki_search')
-  assert.equal(toolCalls[0].function.arguments, '{"query":"韭菜盒子"}')
+  assert.equal(toolCalls[0].function.arguments, '{"query":"COMIC-BOX"}')
 })
 
 test('readChatCompletionResponse ignores reasoning deltas and stops on DONE', async () => {

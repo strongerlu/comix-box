@@ -109,7 +109,7 @@ function transportLabel(transport: BuiltinMcpCatalogEntry['transport'] | McpServ
   if (transport === 'stdio') return '本地 stdio'
   if (transport === 'streamable-http') return '远程 MCP'
   if (transport === 'sse') return '远程 SSE'
-  return '韭菜盒子'
+  return 'COMIC-BOX'
 }
 
 function statusLabel(server?: McpServerConfig) {

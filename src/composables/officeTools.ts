@@ -149,7 +149,7 @@ async function saveMarkdownDocument(args: Record<string, unknown>): Promise<stri
   }
 
   const requestedType = String(args.doc_type || args.format || 'md').trim().toLowerCase()
-  const title = sanitizeFilenamePart(String(args.title || args.filename || '韭菜盒子对话导出'), '韭菜盒子对话导出')
+  const title = sanitizeFilenamePart(String(args.title || args.filename || 'COMIC-BOX对话导出'), 'COMIC-BOX对话导出')
   const isDocx = requestedType === 'docx' || requestedType === 'word'
   const textType = requestedType === 'txt' ? 'txt' : requestedType === 'csv' ? 'csv' : 'md'
   const filename = `${title}.${isDocx ? 'docx' : textType}`

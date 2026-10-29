@@ -315,6 +315,21 @@ if (!registry.includes(providerGuard)) registry = registry.replace('if (match ==
 if (!registry.includes('skills: entries.sort') || !registry.includes(nameGuard) || !registry.includes(providerGuard)) throw new Error('官方 Skill 范围补丁锚点不匹配')
 writeChanged(skillRegistryPath, registry)
 
+// Auxiliary Skill instructions must precede the task, so a fresh session does not
+// answer the catalog reminder instead of the user's actual request. Keep the
+// official catalog, invocation content, identities and lazy loader unchanged.
+const skillToolPath = join(deepseekPackages, 'dsh-tool-skill', 'lib', 'index.js')
+let skillTool = readFileSync(skillToolPath, 'utf8')
+for (const [before, after] of [
+  ['messages: [...decision.messages, ...injections]', 'messages: [...injections, ...decision.messages]'],
+  ['existing === void 0 ? [...decision.messages, catalog]', 'existing === void 0 ? [catalog, ...decision.messages]'],
+]) {
+  if (skillTool.includes(after)) continue
+  if (!skillTool.includes(before)) throw new Error('官方 Skill 辅助消息顺序补丁锚点不匹配')
+  skillTool = skillTool.replace(before, after)
+}
+writeChanged(skillToolPath, skillTool)
+
 // Preserve accepted official Inbox entries across a desktop runtime restart.
 const loopPath = join(deepseekPackages, 'dsh-agent-loop', 'lib', 'index.js')
 if (existsSync(loopPath)) {
@@ -323,8 +338,15 @@ if (existsSync(loopPath)) {
   const durableDispose = 'machine.cancel({ kind: "disposed" }, { keepInbox: true });'
   if (!loop.includes(durableDispose)) {
     if (!loop.includes(ordinaryDispose)) throw new Error('官方 Inbox 重启保留补丁锚点不匹配')
-    writeChanged(loopPath, loop.replace(ordinaryDispose, durableDispose))
+    loop = loop.replace(ordinaryDispose, durableDispose)
   }
+  const appendedContext = 'messages: context === void 0 ? claimed : [...claimed, context]'
+  const precedingContext = 'messages: context === void 0 ? claimed : [context, ...claimed]'
+  if (!loop.includes(precedingContext)) {
+    if (!loop.includes(appendedContext)) throw new Error('官方运行上下文消息顺序补丁锚点不匹配')
+    loop = loop.replace(appendedContext, precedingContext)
+  }
+  writeChanged(loopPath, loop)
 }
 
 function patchProductionService(packageName, symbol, before, after) {

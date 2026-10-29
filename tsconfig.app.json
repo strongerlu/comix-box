@@ -6,11 +6,16 @@
     "ignoreDeprecations": "6.0",
     "baseUrl": ".",
     "paths": {
-      "@/*": ["src/*"],
-      "@app-root": ["src/App.vue"]
+      "@/*": [
+        "src/*"
+      ],
+      "@app-root": [
+        "src/App.vue"
+      ]
     },
     "noUnusedLocals": false,
-    "noUnusedParameters": false
+    "noUnusedParameters": false,
+    "noEmit": true
   },
   "include": [
     "src/**/*.ts",

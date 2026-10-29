@@ -140,17 +140,58 @@ test('pipeline checkpoints reject missing stages and overlong segments, then com
     await assert.rejects(checkpoint({ stage: 'prompts', outputs: [first], segments: [{ path: first, start_seconds: 0, end_seconds: limit + 1 }] }), /上限/)
     const second = await save({ artifact_kind: 'video_prompt', episode_number: 1, video_model: model, segment: '002' }, model === 'H3' ? '# 第二段\n<Picture 1> is 山门.' : '# 第二段\n@图1：山门')
     const refs = { refs: ['场景/山门'] }
+    for (const transition of [{ type: 'unknown', reason: 'x' }, { type: 'continue', reason: '' }]) {
+      await assert.rejects(checkpoint({ stage: 'prompts', outputs: [first, second], segments: [
+        { path: first, start_seconds: 0, end_seconds: limit, ...refs },
+        { path: second, start_seconds: limit, end_seconds: limit + 1, ...refs, transition },
+      ] }), /镜头关系/)
+    }
     await checkpoint({ stage: 'prompts', outputs: [first, second], segments: [
-      { path: first, start_seconds: 0, end_seconds: limit, ...refs }, { path: second, start_seconds: limit, end_seconds: limit + 1, ...refs },
+      { path: first, start_seconds: 0, end_seconds: limit, ...refs, transition: { type: 'scene_change', reason: '本集开场' } },
+      { path: second, start_seconds: limit, end_seconds: limit + 1, ...refs, transition: { type: 'cut', reason: '工程镜头切至反打' } },
     ] })
+    assert.equal(JSON.parse(files.get(join(root, progress.path)).content).segments[1].transition.type, 'cut')
     files.set(join(root, summary), { content: '# 被用户改过', version: 99 })
     await assert.rejects(checkpoint({ stage: 'complete', outputs: [] }), /前置产物已修改/)
     files.set(join(root, summary), { content: '# 故事梗概\n主角归来\n', version: 100 })
     await assert.rejects(checkpoint({ stage: 'complete', outputs: [], status: 'blocked', reason: '矛盾状态' }), /完成阶段不能同时标记暂停/)
-    await checkpoint({ stage: 'complete', outputs: [] })
+    const receipt = await checkpoint({ stage: 'complete', outputs: [] })
+    assert.deepEqual(receipt.checkpoint, { stage: 'complete', status: 'completed', duration_seconds: limit + 1, segment_count: 2 })
     assert.equal(JSON.parse(files.get(join(root, progress.path)).content).stage, 'complete')
     assert.equal(JSON.parse(files.get(join(root, progress.path)).content).status, 'completed')
+    const completed = files.get(join(root, progress.path)).content
+    await assert.rejects(checkpoint({ stage: 'prompts', outputs: [first, second], prompts: { segments: [] } }), /segments.*根对象/)
+    await assert.rejects(checkpoint({ stage: 'prompts', outputs: [first, second] }), /显式.*segments/)
+    assert.equal(files.get(join(root, progress.path)).content, completed, 'invalid revisions must not reuse the previous segments or change progress')
   }
+})
+
+test('ambiguous artifact versions require an explicit existing canonical target and preserve the other version', async t => {
+  const root = mkdtempSync(join(tmpdir(), 'jc-wiki-select-version-'))
+  t.after(() => rmSync(root, { recursive: true, force: true }))
+  const { tool, exec, files, sourceAgent } = createHarness(root, { route: 'manju' })
+  const oldPath = 'wiki/资产/角色/甲.md'
+  const newPath = 'wiki/资产/角色/甲/角色生图提示词.md'
+  files.set(join(root, 'wiki/index.md'), { content: '# Wiki\n', version: 0 })
+  files.set(join(root, oldPath), { content: '# 旧版本\n', version: 1 })
+  files.set(join(root, newPath), { content: '# 新版本\n', version: 2 })
+  const args = { artifact_kind: 'character_asset', entity_name: '甲', content: '# 修订\n' }
+  await assert.rejects(tool.execute(args, exec), /target_path/)
+  for (const path of ['wiki/资产/角色/乙.md', '../外部.md', 'wiki/资产/角色/甲/../甲.md'])
+    await assert.rejects(tool.execute({ ...args, target_path: path, write_mode: 'update' }, exec), /target_path/)
+  await assert.rejects(tool.execute({ ...args, target_path: oldPath, write_mode: 'create' }, exec), /update/)
+  resetWikiReads(sourceAgent)
+  const observe = path => recordWikiRead(sourceAgent, { targetKey: join(root, path) }, { kind: 'present', version: files.get(join(root, path)).version }, { ...exec, agent: sourceAgent, name: 'read' })
+  await assert.rejects(tool.execute({ ...args, target_path: newPath, write_mode: 'update' }, exec), /读取.*target_path/)
+  observe(newPath)
+  files.get(join(root, newPath)).version = 3
+  await assert.rejects(tool.execute({ ...args, target_path: newPath, write_mode: 'update' }, exec), /读取.*target_path/)
+  observe(newPath)
+  assert.equal((await tool.execute({ ...args, target_path: newPath, write_mode: 'update' }, exec)).path, newPath)
+  assert.equal(files.get(join(root, oldPath)).content, '# 旧版本\n')
+  observe(oldPath)
+  assert.equal((await tool.execute({ ...args, target_path: oldPath, write_mode: 'update' }, exec)).path, oldPath)
+  assert.equal(files.get(join(root, newPath)).content, '# 修订\n')
 })
 
 test('Seedance pipeline registers image assets and binds each segment @图 order to registered refs', async t => {

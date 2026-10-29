@@ -16,11 +16,11 @@ const MIME_TYPES: Record<LocalExportFormat, string> = {
 }
 
 function sanitizeFilename(value: string): string {
-  return String(value || '韭菜盒子导出')
+  return String(value || 'COMIC-BOX导出')
     .replace(/[/\\:*?"<>|]/g, '_')
     .replace(/\s+/g, ' ')
     .trim()
-    .slice(0, 80) || '韭菜盒子导出'
+    .slice(0, 80) || 'COMIC-BOX导出'
 }
 
 function stripMarkdown(text: string): string {
@@ -58,7 +58,7 @@ function markdownToSimpleHtml(markdown: string): string {
   return [
     '<!doctype html>',
     '<html lang="zh-CN">',
-    '<head><meta charset="utf-8"><title>韭菜盒子导出</title></head>',
+    '<head><meta charset="utf-8"><title>COMIC-BOX导出</title></head>',
     '<body>',
     body,
     '</body>',
@@ -101,7 +101,7 @@ export function getLocalExportFormats(content: string): LocalExportFormat[] {
 export function buildMessageExportFile(
   format: LocalExportFormat,
   content: string,
-  title = '韭菜盒子导出',
+  title = 'COMIC-BOX导出',
 ): MessageExportFile {
   const filename = `${sanitizeFilename(title)}.${format}`
   if (format === 'txt') {

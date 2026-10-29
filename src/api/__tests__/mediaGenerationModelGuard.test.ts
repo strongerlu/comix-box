@@ -3,7 +3,7 @@ import { test } from 'node:test'
 
 import { __resetApiKeyMemoryCacheForTests } from '../../services/newApiClient'
 import { clearMediaModelAvailability, setMediaModelAvailability } from '../../data/mediaModelCapabilities'
-import { apiCall, apiCallMultipart, assertMediaModelExecutable, generateAudio, generateImage, generateVideo, pollTask } from '../media-generation'
+import { apiCall, apiCallBinary, apiCallMultipart, assertMediaModelExecutable, generateAudio, generateImage, generateVideo, getCreationApiBase, pollTask } from '../media-generation'
 
 async function installGatewaySession() {
   __resetApiKeyMemoryCacheForTests('session-cloud')
@@ -11,6 +11,49 @@ async function installGatewaySession() {
     __resetApiKeyMemoryCacheForTests('')
   }
 }
+
+test('desktop dev media uses native HTTPS and does not route paid requests through the Vite proxy', () => {
+  const prior = (globalThis as any).window
+  try {
+    ;(globalThis as any).window = { location: { origin: 'http://localhost:1420' }, __TAURI_INTERNALS__: {} }
+    assert.equal(getCreationApiBase(), 'https://api.jiucaihezi.studio')
+    ;(globalThis as any).window = { location: { origin: 'http://localhost:1420' } }
+    assert.equal(getCreationApiBase(), '/__jc_api')
+  } finally { (globalThis as any).window = prior }
+})
+
+test('media deadlines remain active while JSON, error and binary response bodies are being read', { concurrency: false }, async () => {
+  const restore = await installGatewaySession()
+  const previousFetch = globalThis.fetch
+  const previousSetTimeout = globalThis.setTimeout
+  const previousClearTimeout = globalThis.clearTimeout
+  const deadlines = new Set<unknown>()
+  let status = 200
+  ;(globalThis as any).setTimeout = (_handler: unknown, ms: number) => { const timer = {}; if (ms === 630000 || ms === 300000) deadlines.add(timer); return timer }
+  ;(globalThis as any).clearTimeout = (timer: unknown) => { deadlines.delete(timer) }
+  globalThis.fetch = async () => ({
+    ok: status === 200, status, headers: new Headers({ 'content-type': 'audio/mpeg' }),
+    async json() { assert.equal(deadlines.size, 1); return {} },
+    async text() { assert.equal(deadlines.size, 1); return 'upstream error' },
+    async arrayBuffer() { assert.equal(deadlines.size, 1); return new Uint8Array([1, 2]).buffer },
+  }) as Response
+  try {
+    await apiCall('/v1/images/generations', {})
+    assert.equal(deadlines.size, 0)
+    await apiCallMultipart('/v1/images/edits', { model: 'test' })
+    assert.equal(deadlines.size, 0)
+    await apiCallBinary('/v1/audio/speech', {})
+    assert.equal(deadlines.size, 0)
+    status = 400
+    await assert.rejects(() => apiCall('/v1/images/generations', {}), /HTTP 400: upstream error/)
+    assert.equal(deadlines.size, 0)
+  } finally {
+    globalThis.fetch = previousFetch
+    globalThis.setTimeout = previousSetTimeout
+    globalThis.clearTimeout = previousClearTimeout
+    await restore()
+  }
+})
 
 async function withImmediateTimers<T>(fn: () => Promise<T>): Promise<T> {
   const previousSetTimeout = globalThis.setTimeout

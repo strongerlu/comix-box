@@ -464,6 +464,14 @@ test('失败行补齐尝试次数，失败文案走官方 failureMessage 映射'
   assert.equal(deepSeekFailureText('524 status code (no body)', 'TIMEOUT'), '524 status code (no body)')
 })
 
+test('NewAPI quota rejection is not mislabeled as an invalid API key', () => {
+  const upstream = '403 {"error":{"message":"用户额度不足，用户剩余额度较低，需要预扣费额度","type":"new_api_error"}}'
+  assert.match(deepSeekFailureText(upstream, 'AUTH'), /额度不足/)
+  assert.doesNotMatch(deepSeekFailureText(upstream, 'AUTH'), /密钥无效/)
+  assert.match(deepSeekFailureText('403 insufficient_quota', 'AUTH'), /额度不足/)
+  assert.equal(deepSeekFailureText('401 invalid_api_key', 'AUTH'), 'API 密钥无效')
+})
+
 test('创作范围由结构化参数传递，保留官方加载器和原生能力', () => {
   const prepare = readFileSync('scripts/prepare-deepseek-harness.mjs', 'utf8')
   assert.doesNotMatch(prepare, /tools\.restrict\(\{ deny: \["skill"\]/)
@@ -546,7 +554,9 @@ test('Harness keeps its runtime state in app data instead of the user project', 
   // 只报「正在重试」时用户无法区分“上游限流”和“自己的代码在转圈”。
   assert.match(source, /const detail = \[failure\?\.code, String\(failure\?\.message/)
   assert.match(source, /appDataDir\(\)/)
-  assert.match(source, /writeTextFile\(patchPath/)
+  assert.match(source, /invoke\('dev_write_file', \{ input: \{ root: routeDir, relativePath: 'route\.cordis\.yml'/)
+  assert.match(source, /invoke\('dev_create_dir_external', \{ input: \{ path: routeDir \} \}\)/)
+  assert.doesNotMatch(source, /writeTextFile\(patchPath/)
   assert.match(source, /dev_copy_external/)
   assert.match(source, /resolveResource\([^)]*node\/bin\//s)
   assert.match(source, /DSH_PERMISSION_MODE: input\.permissionTier \?\? DEEPSEEK_DEFAULT_PERMISSION_TIER/)
@@ -648,9 +658,9 @@ test('Harness uses existing catalog metadata, cloud defaults and 256K local fall
   ]
   assert.deepEqual(deepSeekModelLimits({ model: 'ds', modelProviderId: 'jiucaihezi' }, models), { contextWindow: 1_048_576, maxTokens: 65_536 })
   assert.deepEqual(deepSeekModelLimits({ model: 'ds', modelProviderId: 'local-ollama' }, models), { contextWindow: 16_384, maxTokens: 2_048 })
-  assert.deepEqual(deepSeekModelLimits({ model: 'unknown' }, []), { contextWindow: 1_000_000, maxTokens: 128_000 })
+  assert.deepEqual(deepSeekModelLimits({ model: 'unknown' }, []), { contextWindow: 1_000_000, maxTokens: 32_768 })
   assert.deepEqual(deepSeekModelLimits({ model: 'unknown', modelProviderId: 'local-ollama' }, models), { contextWindow: 262_144, maxTokens: 32_768 })
-  assert.deepEqual(deepSeekModelLimits({ model: 'ds' }, [{ id: 'ds', contextWindow: NaN, maxOutputTokens: -1 }]), { contextWindow: 1_000_000, maxTokens: 128_000 })
+  assert.deepEqual(deepSeekModelLimits({ model: 'ds' }, [{ id: 'ds', contextWindow: NaN, maxOutputTokens: -1 }]), { contextWindow: 1_000_000, maxTokens: 32_768 })
 })
 
 test('Harness runtimes are owned per workspace instead of one replaceable app singleton', () => {
@@ -928,7 +938,6 @@ test('Harness stdio children are reaped as a process tree', () => {
   // 只杀直接子进程会留下 runner 拉起的 dsh 孙进程，它握着会话的跨进程内核写锁且永不过期。
   assert.match(rust, /fn tree_kill_plan\(pid: u32\)/)
   assert.match(rust, /vec!\["\/T"\.into\(\), "\/F"\.into\(\), "\/PID"\.into\(\), pid\.to_string\(\)\]/)
-  assert.match(rust, /cmd\.process_group\(0\)/)
   assert.match(rust, /kill_process_tree\(process\.pid\)/)
   // 页面重载收 Harness 运行时；应用退出收所有 stdio 进程树。
   assert.match(rust, /pub fn mcp_reap_stale_harness\(/)
@@ -1107,7 +1116,7 @@ test('a running Harness turn carries no status banner, only the in-turn process'
 test('blank assistant text and replaced copies stay out of the transcript', () => {
   // 官方 visibleAssistantEvent：只认 surfaceOp=append，text 块要 trim 后非空。
   // 真样本里纯工具步的正文就是两个换行（'\\n\\n'），不 trim 就会多出一个只有
-  // 「韭菜盒子」四个字的空行；而被压缩替掉的副本官方明确「stay model-only」，不该上屏。
+  // 「COMIC-BOX」四个字的空行；而被压缩替掉的副本官方明确「stay model-only」，不该上屏。
   const turns = deepSeekSessionTurns({
     session: { id: 's' },
     events: [

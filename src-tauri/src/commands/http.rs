@@ -520,8 +520,6 @@ pub async fn http_download_to_project(
     request: HttpDownloadToProjectRequest,
     on_progress: Channel<super::media_download::Progress>,
 ) -> Result<HttpDownloadToProjectResponse, String> {
-    #[cfg(not(any(target_os = "ios", target_os = "android")))]
-    let _update_task = super::desktop_update::native_task(&app, "下载到项目")?;
     download_to_project(request, Some(app), Some(on_progress)).await
 }
 
@@ -530,7 +528,9 @@ async fn validate_download_video(app: Option<&tauri::AppHandle>, path: &std::pat
     let app = app.ok_or_else(|| "视频校验需要桌面运行时".to_string())?;
     super::media_download::validate_container(path).await?;
     let Ok(probe) = crate::commands::tools::resolve_app_media_binary(app, "ffprobe") else { return Ok(()); };
-    let output = tokio::time::timeout(std::time::Duration::from_secs(30), tokio::process::Command::new(probe)
+    let mut command = tokio::process::Command::new(probe);
+    super::tools::configure_background_command(command.as_std_mut());
+    let output = tokio::time::timeout(std::time::Duration::from_secs(30), command
         .args(["-v", "error", "-select_streams", "v:0", "-show_entries", "stream=codec_type", "-of", "csv=p=0"])
         .arg(path).kill_on_drop(true).output()).await.map_err(|_| "视频完整性校验超时")?
         .map_err(|_| "无法启动视频校验组件")?;

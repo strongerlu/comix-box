@@ -20,7 +20,7 @@ pub struct SaveGeneratedFileOutput {
 
 #[tauri::command]
 pub fn greet(name: &str) -> String {
-    format!("你好，{}！韭菜盒子桌面版已就绪。", name)
+    format!("你好，{}！COMIC-BOX桌面版已就绪。", name)
 }
 
 #[tauri::command]
@@ -38,7 +38,7 @@ pub fn save_generated_file(
         let stem = path
             .file_stem()
             .and_then(|value| value.to_str())
-            .unwrap_or("韭菜盒子作品");
+            .unwrap_or("COMIC-BOX作品");
         let extension = path.extension().and_then(|value| value.to_str());
         let parent = path.parent().ok_or_else(|| "保存路径无效".to_string())?;
         let mut index = 0;

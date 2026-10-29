@@ -2,7 +2,7 @@ import { openExternal } from '@/utils/httpClient'
 import { prepareApiKeyCallbackIntent } from './apiKeyCallback'
 import { getGatewayBaseUrl } from './newApiClient'
 
-export const DESKTOP_LOGIN_CALLBACK_URL = 'jiucaihezi://auth/callback'
+export const DESKTOP_LOGIN_CALLBACK_URL = 'comic-box://auth/callback'
 
 export interface BuildDesktopBrowserLoginUrlInput {
   gatewayBase?: string

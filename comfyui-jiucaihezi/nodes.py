@@ -95,7 +95,7 @@ class JiucaiheziImageTask:
 
     def submit(self, api_key, model, prompt, resolution, size, images):
         token = key(api_key)
-        if not token: raise RuntimeError("请填入韭菜盒子 API Key。")
+        if not token: raise RuntimeError("请填入COMIC-BOX API Key。")
         files = [("image", (f"image{i}.png", image_bytes(image), "image/png")) for i, image in enumerate(images, 1)]
         response = requests.post(f"{API_BASE}/videos", headers={"Authorization": f"Bearer {token}", "x-api-key": token}, data={"model": model, "prompt": prompt, "size": size, "resolution": resolution, "seconds": "1", "response_format": "url"}, files=files, timeout=300)
         response.raise_for_status(); submitted = response.json()
@@ -171,7 +171,7 @@ class JiucaiheziLLM:
 
     def generate(self, api_baseurl, api_key, model, custom_model, role, prompt, temperature, seed, skip_error):
         token = key(api_key); selected_model = key(custom_model) or key(model); base = key(api_baseurl).rstrip("/")
-        if not token: raise RuntimeError("请填入韭菜盒子 API Key。")
+        if not token: raise RuntimeError("请填入COMIC-BOX API Key。")
         if not base: raise RuntimeError("请填入 API Base URL。")
         if not selected_model: raise RuntimeError("请选择或输入模型。")
         payload = {"model": selected_model, "messages": [{"role": "system", "content": role}, {"role": "user", "content": prompt}], "temperature": float(temperature)}
@@ -186,4 +186,4 @@ class JiucaiheziLLM:
 
 
 NODE_CLASS_MAPPINGS = {"JiucaiheziImage": JiucaiheziImage, "JiucaiheziLLM": JiucaiheziLLM}
-NODE_DISPLAY_NAME_MAPPINGS = {"JiucaiheziImage": "韭菜盒子 图片生成", "JiucaiheziLLM": "韭菜盒子 LLM"}
+NODE_DISPLAY_NAME_MAPPINGS = {"JiucaiheziImage": "COMIC-BOX 图片生成", "JiucaiheziLLM": "COMIC-BOX LLM"}

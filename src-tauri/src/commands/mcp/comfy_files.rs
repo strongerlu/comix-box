@@ -16,18 +16,12 @@ fn write_input(root: &Path, id: &str, name: &str, data: &str) -> Result<String, 
     let dir = root.join(id);
     if dir.symlink_metadata().is_ok_and(|m| m.file_type().is_symlink()) { return Err("ComfyUI 工作目录不能是符号链接".into()); }
     std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
-    #[cfg(unix)] {
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700)).map_err(|e| e.to_string())?;
-    }
+
     let path = dir.join(name);
     if name == "result.marker" && path.is_file() { return Ok(path.to_string_lossy().into_owned()); }
     let mut options = std::fs::OpenOptions::new();
     options.write(true).create_new(true);
-    #[cfg(unix)] {
-        use std::os::unix::fs::OpenOptionsExt;
-        options.mode(0o600);
-    }
+
     let mut file = options.open(&path).map_err(|e| format!("创建 ComfyUI 输入失败: {e}"))?;
     if let Err(error) = file.write_all(&bytes) {
         drop(file);
@@ -55,9 +49,6 @@ mod tests {
         let file = write_input(dir.path(), &id, "workflow.json", "e30=").unwrap();
         assert_eq!(std::fs::read(&file).unwrap(), b"{}");
         assert!(write_input(dir.path(), &id, "workflow.json", "e30=").is_err());
-        #[cfg(unix)] {
-            use std::os::unix::fs::PermissionsExt;
-            assert_eq!(std::fs::metadata(file).unwrap().permissions().mode() & 0o777, 0o600);
-        }
+
     }
 }

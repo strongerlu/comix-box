@@ -11,11 +11,11 @@ const ARTIFACT_STYLE = `
 `.trim()
 
 export function artifactFilename(title: string, extension: string): string {
-  const safe = String(title || '韭菜盒子作品')
+  const safe = String(title || 'COMIC-BOX作品')
     .replace(/[/\\:*?"<>|\0]/g, '_')
     .replace(/\s+/g, ' ')
     .trim()
-    .slice(0, 80) || '韭菜盒子作品'
+    .slice(0, 80) || 'COMIC-BOX作品'
   return `${safe.replace(/\.[a-z0-9]{1,8}$/i, '')}.${extension}`
 }
 
@@ -30,7 +30,7 @@ function markdownSlides(content: string): string[] {
 }
 
 export function createMarkdownSlidesHtml(title: string, content: string): string {
-  const safeTitle = String(title || '韭菜盒子幻灯片').replace(/[&<>"']/g, value => ({
+  const safeTitle = String(title || 'COMIC-BOX幻灯片').replace(/[&<>"']/g, value => ({
     '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
   })[value]!)
   const slides = markdownSlides(content).map((slide, index) =>
@@ -75,7 +75,7 @@ async function createMarkdownSlidesPptx(title: string, content: string): Promise
   const { default: PptxGenJS } = await import('pptxgenjs')
   const deck = new PptxGenJS()
   deck.layout = 'LAYOUT_WIDE'
-  deck.author = '韭菜盒子 Studio'
+  deck.author = 'COMIC-BOX'
   deck.title = title
   for (const source of markdownSlides(content)) {
     const slide = deck.addSlide()
@@ -136,7 +136,7 @@ export function createArtifactHtml(title: string, content: string): string {
   if (/<(?:style|script|main|section|article|div|table|form|nav|header|footer)(?:\s|>)/i.test(source)) {
     throw new Error('网页内容不完整，请提供包含 html、head 和 body 的完整 HTML 后重试')
   }
-  const safeTitle = String(title || '韭菜盒子作品').replace(/[&<>"']/g, value => ({
+  const safeTitle = String(title || 'COMIC-BOX作品').replace(/[&<>"']/g, value => ({
     '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
   })[value]!)
   return [

@@ -1,4 +1,5 @@
 import { safeFetch } from '../utils/httpClient'
+import { declaredModelCapacity } from '../utils/modelCapacity'
 import { getMediaModel, isMediaModelEnabled, isRemovedMediaModelId } from '../data/mediaModelCapabilities'
 import { isTauriRuntime } from '../utils/tauriEnv'
 import { resolveWebApiBaseUrl } from '../utils/providerConfig'
@@ -34,7 +35,7 @@ async function getInvokeApi() {
 }
 
 // ─── 核心：CLI 文件是唯一持久化源 ───
-// Skill (jc_media.py) 和 UI 都从 ~/.jiucaihezi/.jc_api_key 读写。
+// Skill (jc_media.py) 和 UI 都从 ~/.comic-box/.jc_api_key 读写。
 // set_api_key (Rust) 写入 Keychain + CLI 文件，get_cli_api_key 只读 CLI 文件。
 // 不再依赖 Keychain 读取（macOS 权限弹窗静默失败），不再预验证 Key。
 
@@ -77,33 +78,20 @@ export function getApiKey(): string {
 
 export async function setApiKey(token: string): Promise<void> {
   const clean = String(token || '').trim()
+  if (isTauriRuntime()) {
+    const { invoke } = await import('@tauri-apps/api/core')
+    if (clean) await invoke('set_api_key', { apiKey: clean })
+    else await invoke('clear_api_key')
+  } else {
+    if (clean) localStorage.setItem(API_KEY_STORAGE_KEY, clean)
+    else localStorage.removeItem(API_KEY_STORAGE_KEY)
+  }
   apiKeyMemoryCache = clean
   apiKeyReady.value = clean
-  if (isTauriRuntime()) {
-    try {
-      const { invoke } = await import('@tauri-apps/api/core')
-      if (clean) await invoke('set_api_key', { apiKey: clean })
-      else await invoke('clear_api_key')
-    } catch { /* Tauri 未就绪 */ }
-  } else {
-    try {
-      if (clean) localStorage.setItem(API_KEY_STORAGE_KEY, clean)
-      else localStorage.removeItem(API_KEY_STORAGE_KEY)
-    } catch {}
-  }
 }
 
 export async function clearApiKey(): Promise<void> {
-  apiKeyMemoryCache = ''
-  apiKeyReady.value = ''
-  if (isTauriRuntime()) {
-    try {
-      const { invoke } = await import('@tauri-apps/api/core')
-      await invoke('clear_api_key')
-    } catch {}
-  } else {
-    try { localStorage.removeItem(API_KEY_STORAGE_KEY) } catch {}
-  }
+  await setApiKey('')
 }
 
 export function __resetApiKeyMemoryCacheForTests(value = ''): void {
@@ -179,8 +167,6 @@ export interface GatewayUser {
   username: string
   email?: string
   displayName?: string
-  affCode?: string
-  aff_code?: string
   requestCount: number
   request_count: number
   plan: string
@@ -247,6 +233,7 @@ export interface GatewayTopupOrder {
 }
 
 export function getGatewayBaseUrl(): string {
+  if (isTauriRuntime()) return DEFAULT_GATEWAY_BASE_URL
   // 本地开发时走 Vite proxy /__jc_api → api.jiucaihezi.studio
   // ⚠️ Tauri 桌面端 origin 因平台而异，必须排除，否则误判为 dev 模式：
   //   macOS/Linux: tauri://localhost
@@ -405,14 +392,6 @@ export async function gatewayMe(): Promise<GatewayUser> {
   return user
 }
 
-export async function gatewayCheckinStatus(): Promise<any> {
-  return gatewayJson('/api/me/checkin')
-}
-
-export async function gatewayCheckin(): Promise<any> {
-  return gatewayJson('/api/me/checkin', { method: 'POST' })
-}
-
 export async function gatewayRedeem(key: string): Promise<any> {
   return gatewayJson('/api/me/redeem', {
     method: 'POST',
@@ -428,10 +407,6 @@ export async function gatewayLedger(): Promise<GatewayLedgerItem[]> {
 export async function gatewayUsage(): Promise<GatewayLedgerItem[]> {
   const data = await gatewayJson<any>('/api/me/usage')
   return normalizeItems(data) as GatewayLedgerItem[]
-}
-
-export async function gatewayAffiliate(): Promise<any> {
-  return gatewayJson('/api/me/affiliate')
 }
 
 export async function gatewaySubscribeMembership(): Promise<GatewayUser> {
@@ -528,15 +503,6 @@ export function extractGatewayUserPayload(payload: any): any {
 export function normalizeGatewayUser(payload: any): GatewayUser {
   const source = firstObject(payload?.account, payload?.user, payload?.data, payload)
   const membership = normalizeGatewayMembership(firstObject(source?.membership, payload?.membership))
-  const affCode = String(
-    source?.affCode
-    || source?.aff_code
-    || source?.inviteCode
-    || source?.invite_code
-    || payload?.affCode
-    || payload?.aff_code
-    || ''
-  ).trim()
   const requestCount = firstNumber(
     source?.requestCount,
     source?.request_count,
@@ -567,11 +533,9 @@ export function normalizeGatewayUser(payload: any): GatewayUser {
 
   return {
     id: String(source?.id || source?.userId || source?.user_id || ''),
-    username: String(source?.username || source?.name || source?.displayName || source?.email || '韭菜盒子用户'),
+    username: String(source?.username || source?.name || source?.displayName || source?.email || 'COMIC-BOX用户'),
     email: source?.email ? String(source.email) : undefined,
     displayName: source?.displayName || source?.display_name || source?.name,
-    affCode,
-    aff_code: affCode,
     requestCount,
     request_count: requestCount,
     plan: String(source?.plan || payload?.plan || 'free'),
@@ -615,8 +579,7 @@ export function normalizeGatewayModels(payload: any): GatewayModelEntry[] {
         label: String(item?.label || item?.name || item?.displayName || item?.display_name || id),
         providerId: 'jiucaihezi' as const,
         capability,
-        contextWindow: positiveNumber(item?.contextWindow) ?? positiveNumber(item?.context_window) ?? positiveNumber(item?.context_length),
-        maxOutputTokens: positiveNumber(item?.maxOutputTokens) ?? positiveNumber(item?.max_output_tokens) ?? positiveNumber(item?.top_provider?.max_completion_tokens),
+        ...declaredModelCapacity(item),
         channel: item?.channel ? String(item.channel) : undefined,
         taskTypes,
         toolCall: typeof item?.tool_call === 'boolean'
@@ -627,10 +590,6 @@ export function normalizeGatewayModels(payload: any): GatewayModelEntry[] {
     .filter(Boolean) as GatewayModelEntry[]
 }
 
-function positiveNumber(value: unknown): number | undefined {
-  const number = typeof value === 'number' ? value : Number(value)
-  return Number.isFinite(number) && number > 0 ? Math.floor(number) : undefined
-}
 
 export function normalizeGatewayTopupOrder(input: any): GatewayTopupOrder {
   const order = firstObject(input?.data, input) || {}

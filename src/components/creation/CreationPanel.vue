@@ -14,6 +14,7 @@ import {
   Platform,
   Rect,
   MoveEvent,
+  RenderEvent,
   ZoomEvent,
   DragEvent as LeaferDragEvent,
   Text as LeaferText,
@@ -112,6 +113,9 @@ import {
   type AiAppDirectoryEntry,
   type CreationFieldValue,
 } from '@/composables/useCreation'
+import CreationTaskThumbnail from './CreationTaskThumbnail.vue'
+import { creationTaskStage, matchesCreationTaskFilter, creationModelDisplayLabel, type CreationTaskFilter } from '@/utils/creationPresentation'
+import { isUncertainSubmission } from '@/runtime/creation/submissionSafety'
 import { creationModelFamily, displayModelLabel, displayModelPrice, getCreationModelSpec, RH_ONLY_MODE } from '@/runtime/creation/creationModelRegistry'
 import { buildCreationRunPlan } from '@/runtime/creation/creationMediaPlan'
 import type { CreationFieldSpec } from '@/runtime/creation/creationMediaTypes'
@@ -217,8 +221,8 @@ const creationActiveTasks = computed(() =>
 const creationRunningCount = computed(() => creationActiveTasks.value.length)
 const creationProgressText = computed(() => {
   const firstTask = creationActiveTasks.value[0]
-  if (creationRunningCount.value > 1) return `${creationRunningCount.value}个任务生成中...`
-  return firstTask?.progressText || cpState.progressText || '生成中...'
+  if (creationRunningCount.value > 1) return `${creationRunningCount.value} 个任务进行中`
+  return firstTask ? `${creationTaskStage(firstTask)}${firstTask.progressText ? ` · ${firstTask.progressText}` : ''}` : cpState.progressText || '生成中...'
 })
 const creationProgress = computed(() => {
   const firstTask = creationActiveTasks.value[0]
@@ -232,7 +236,18 @@ const creationTasks = computed(() =>
     .filter(t => t.source === 'creation')
     .sort((a, b) => (b.completedAt || b.createdAt) - (a.completedAt || a.createdAt)),
 )
-const creationTasksTotal = computed(() => creationTasks.value.length)
+const taskFilter = ref<CreationTaskFilter>('all')
+const taskSearch = ref('')
+const taskFilters: { key: CreationTaskFilter; label: string }[] = [
+  { key: 'all', label: '全部' }, { key: 'active', label: '进行中' },
+  { key: 'saved', label: '已保存' }, { key: 'attention', label: '待处理' },
+]
+const filteredCreationTasks = computed(() => {
+  const query = taskSearch.value.trim().toLocaleLowerCase()
+  return creationTasks.value.filter(task => matchesCreationTaskFilter(task, taskFilter.value)
+    && (!query || [task.prompt, task.modelLabel, task.model, creationTaskStage(task)].some(value => value?.toLocaleLowerCase().includes(query))))
+})
+const creationTasksTotal = computed(() => filteredCreationTasks.value.length)
 
 const taskPageSize = ref(20)
 const taskPage = ref(1)
@@ -240,13 +255,14 @@ const totalTaskPages = computed(() =>
   Math.max(1, Math.ceil(creationTasksTotal.value / taskPageSize.value)),
 )
 
+watch([taskFilter, taskSearch, taskPageSize], () => { taskPage.value = 1 })
 watch(creationTasksTotal, () => {
   if (taskPage.value > totalTaskPages.value) taskPage.value = totalTaskPages.value
 })
 
 const pagedCreationTasks = computed(() => {
   const start = (taskPage.value - 1) * taskPageSize.value
-  return creationTasks.value.slice(start, start + taskPageSize.value)
+  return filteredCreationTasks.value.slice(start, start + taskPageSize.value)
 })
 
 function pad(n: number): string {
@@ -258,25 +274,9 @@ function formatTaskTime(ts: number): string {
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`
 }
 
-function statusIcon(status: string): string {
-  switch (status) {
-    case 'pending':
-    case 'running':
-      return '\u23F3'
-    case 'success':
-      return '\u2705'
-    case 'failed':
-      return '\u274C'
-    case 'cancelled':
-      return '\u2298'
-    default:
-      return '\u23F3'
-  }
-}
-
 function taskPromptLine(task: MediaTask): string {
   const prompt = (task.prompt || '无提示词').slice(0, 80)
-  return `${prompt} · ${task.modelLabel || task.model}`
+  return prompt
 }
 
 function canPersistMediaResult(task: MediaTask): boolean {
@@ -654,7 +654,7 @@ const rhChannelLabel = computed(() => {
   const spec = currentCreationSpec.value
   if (!spec) return '未选择模型'
   if (spec.source === 'local-comfy') return '本机 ComfyUI'
-  if (spec.source === 'newapi-direct') return '韭菜盒子'
+  if (spec.source === 'newapi-direct') return 'COMIC-BOX'
   return spec.apiStyle === 'rh-aiapp' ? 'RH 工作流' : 'RH 官方 API'
 })
 
@@ -1532,6 +1532,10 @@ const CANVAS_MEDIA_GAP = 24
 const VIDEO_CAPTION_HEIGHT = 28
 let canvasRestoring = false
 const canvasInteractionBlocked = ref(false)
+const canvasHasContent = ref(false)
+function syncCanvasContentHint() {
+  canvasHasContent.value = Boolean(app?.tree.children.some(child => child.tag !== 'SimulateElement'))
+}
 const queuedCanvasMedia: CanvasMediaRequest[] = []
 type CanvasLoadGuard = () => boolean
 
@@ -4013,6 +4017,10 @@ onMounted(() => {
     addFileTreeMediaToCanvas(payload)
   }
 
+  // Read the rendered tree, including annotations and undo/redo, without changing canvas persistence.
+  const contentHintId = app.tree.on_(RenderEvent.END, syncCanvasContentHint)
+  canvasCleanups.push(() => app?.tree.off_(contentHintId))
+  syncCanvasContentHint()
   const dragEndId = app.on_(LeaferDragEvent.END, scheduleCanvasSave)
   canvasCleanups.push(() => app?.off_(dragEndId))
   const viewportMoveId = app.on_(MoveEvent.END, scheduleCanvasSave)
@@ -4143,7 +4151,8 @@ const modelList = computed(() =>
     const spec = getCreationModelSpec(key)
     return spec ? [{
       key,
-      label: displayModelLabel(spec.label),
+      label: creationModelDisplayLabel(displayModelLabel(spec.label)),
+      rawLabel: spec.label,
       family: creationModelFamily(spec),
       price: displayModelPrice(spec),
     }] : []
@@ -4202,9 +4211,9 @@ const canSend = computed(
 <template>
   <div class="cp" data-panel="creation">
     <div class="cp-toolbar">
-      <span class="cp-title"><JcIcon name="movie_filter" /><span class="cp-title-text">创作面板</span></span>
+      <span class="cp-title"><JcIcon name="movie_filter" /><span class="cp-title-text">创作智能体</span></span>
       <div ref="canvasPickerRef" class="cp-canvas-picker">
-        <button class="cp-canvas-trigger" type="button" :aria-expanded="canvasPickerOpen" @click="toggleCanvasPicker">
+        <button class="cp-canvas-trigger" type="button" aria-label="选择画布" :title="canvasStore.canvasName" :aria-expanded="canvasPickerOpen" @click="toggleCanvasPicker">
           <span>{{ canvasStore.canvasName }}</span>
           <JcIcon :name="canvasPickerOpen ? 'expand-less' : 'expand-more'" />
         </button>
@@ -4229,7 +4238,10 @@ const canSend = computed(
         <JcIcon name="add" />
       </button>
       <span class="cp-toolbar-spacer" />
-      <button class="cp-toolbar-link" type="button" @click="openTaskHistory">任务记录</button>
+      <button class="cp-toolbar-link" type="button" title="任务记录" aria-label="任务记录" @click="openTaskHistory">
+        <JcIcon name="history" /><span class="cp-toolbar-link-text">任务记录</span>
+        <span v-if="creationRunningCount > 0" class="cp-task-count">{{ creationRunningCount }}</span>
+      </button>
       <button
         class="cp-toolbar-link"
         @click="openExternal('https://dazi.studio/')"
@@ -4238,7 +4250,7 @@ const canSend = computed(
         <JcIcon name="tips_and_updates" />
         <span class="cp-toolbar-link-text">提示词参考</span>
       </button>
-          <span class="cp-toolbar-actions"><slot name="toolbar-actions" /></span>
+      <span class="cp-toolbar-actions"><slot name="toolbar-actions" /></span>
     </div>
 
     <!-- 🆕 画布区域（替代原 cp-gallery-zone） -->
@@ -4260,6 +4272,10 @@ const canSend = computed(
         @dragleave.prevent="canvasDragOver = false"
         @drop.prevent.stop="onCanvasDrop"
       />
+      <div v-if="!canvasHasContent && !canvasInteractionBlocked" class="cp-canvas-welcome" aria-hidden="true">
+        <JcIcon name="add_photo_alternate" /><strong>从一个想法，开始创作</strong>
+        <span>拖入素材、粘贴图片，或在下方生成</span>
+      </div>
       <div v-if="selectedReferenceAssets.length" class="cp-reference-state">
         <span>已选 {{ selectedReferenceSummary }}</span>
         <span v-if="unsupportedReferenceSummary" class="cp-reference-ignored"
@@ -4270,6 +4286,7 @@ const canSend = computed(
       <div v-if="creationRunningCount > 0 || cpState.progressText" class="cp-canvas-progress">
         <JcIcon :name="cpState.progressText?.startsWith('❌') ? 'error' : 'sync'" />
         <span>{{ creationRunningCount > 0 ? creationProgressText : cpState.progressText }}</span>
+        <button type="button" class="cp-progress-details" @click="openTaskHistory">查看任务</button>
         <div v-if="creationRunningCount > 0 && creationProgress > 0" class="cp-generation-progress">
           <i :style="{ width: Math.min(100, Math.max(0, creationProgress)) + '%' }" />
         </div>
@@ -4680,9 +4697,13 @@ const canSend = computed(
               <JcIcon name="close" />
             </button>
           </div>
+          <div class="cp-history-filters">
+            <nav aria-label="任务状态筛选"><button v-for="filter in taskFilters" :key="filter.key" type="button" :aria-pressed="taskFilter === filter.key" @click="taskFilter = filter.key">{{ filter.label }}</button></nav>
+            <input v-model="taskSearch" type="search" placeholder="搜索提示词或模型" aria-label="搜索任务记录" />
+          </div>
           <div v-if="creationTasksTotal === 0" class="cp-task-empty">
             <JcIcon name="movie_filter" />
-            <span>暂无生成记录</span>
+            <span>{{ creationTasks.length ? '没有符合条件的任务' : '暂无生成记录' }}</span>
           </div>
           <div v-else class="cp-task-list">
             <div
@@ -4691,13 +4712,17 @@ const canSend = computed(
               class="cp-task-item"
               :class="task.status"
             >
-              <div class="cp-task-head">
-                <span class="cp-task-status">{{ statusIcon(task.status) }}</span>
-                <span class="cp-task-time">{{
-                  formatTaskTime(task.completedAt || task.createdAt)
-                }}</span>
+              <div class="cp-task-overview">
+                <CreationTaskThumbnail :task="task" />
+                <div class="cp-task-overview-copy">
+                  <div class="cp-task-head">
+                    <span class="cp-task-status">{{ creationTaskStage(task) }}</span>
+                    <span class="cp-task-time">{{ formatTaskTime(task.completedAt || task.createdAt) }}</span>
+                  </div>
+                  <div class="cp-task-prompt" :title="task.prompt">{{ taskPromptLine(task) }}</div>
+                  <div class="cp-task-model" :title="task.model">{{ creationModelDisplayLabel(task.modelLabel || task.model) }}</div>
+                </div>
               </div>
-              <div class="cp-task-prompt">{{ taskPromptLine(task) }}</div>
               <div v-if="task.status === 'running'" class="cp-task-progress">
                 <span>{{ task.progressText || '生成中...' }}</span>
                 <div class="cp-task-progress-bar">
@@ -4705,13 +4730,14 @@ const canSend = computed(
                 </div>
               </div>
               <div v-if="task.status === 'failed' || task.assetStatus === 'failed'" class="cp-task-error">{{ task.errorMsg }}</div>
+              <div v-if="isUncertainSubmission(task)" class="cp-task-error">原请求可能仍在生成，请先核对服务端记录。重新生成可能再次计费；自动续做不会重提这个请求。</div>
               <div v-if="task.status === 'cancelled'" class="cp-task-progress">{{ task.progressText }}</div>
               <div
                 v-if="taskPath(task) && task.status === 'success'"
                 class="cp-task-path"
                 :class="{ remote: !task.assetUri && !task.projectPath }"
               >
-                {{ taskPath(task) }}
+                {{ task.projectPath || task.assetUri ? '保存位置：' : '结果链接：' }}{{ taskPath(task) }}
               </div>
               <div
                 v-if="mediaTaskStore.canCancelTask(task.id) || task.status === 'success' || canPersistMediaResult(task) || canRegenerateTask(task) || canRefreshTaskResult(task)"
@@ -4773,6 +4799,14 @@ const canSend = computed(
       </div>
     </Teleport>
 
+    <details v-if="currentCreationSpec" class="cp-model-capabilities">
+      <summary>模型能力 <span>{{ [...currentReferenceModalities].filter(kind => ['image', 'video', 'audio'].includes(kind)).map(kind => ({ image: '图片', video: '视频', audio: '音频' }[kind])).join(' / ') || '文字' }}输入</span></summary>
+      <div>
+        <span>参考素材：{{ [...currentReferenceModalities].filter(kind => ['image', 'video', 'audio'].includes(kind)).map(kind => ({ image: '图片', video: '视频', audio: '音频' }[kind])).join('、') || '无媒体参考输入' }}</span>
+        <span v-if="resolutionOptions.length">分辨率：{{ resolutionOptions.join(' / ') }}</span>
+        <span v-if="hasDuration && durationRange">时长：{{ durationRange.fixed ? `${durationRange.min} 秒（固定）` : durationOptions.length ? durationOptions.join(' / ') + ' 秒' : `${durationRange.min}–${durationRange.max} 秒` }}</span>
+      </div>
+    </details>
     <!-- 参数条 -->
     <div class="cp-params">
       <!-- 任务 -->
@@ -4797,8 +4831,8 @@ const canSend = computed(
       <!-- 模型 -->
       <div class="cp-island cp-island-selector" role="button" tabindex="0" @keydown.enter.self.prevent="togglePop('model')" @keydown.space.self.prevent="togglePop('model')" @click="togglePop('model')">
         <div class="cp-island-label">模型</div>
-        <div class="cp-island-val">
-          {{ displayModelLabel(currentModel?.label || cpState.modelKey) }}
+        <div class="cp-island-val" :title="currentModel?.label || cpState.modelKey">
+          {{ creationModelDisplayLabel(displayModelLabel(currentModel?.label || cpState.modelKey)) }}
           <small v-if="isFkSeedanceModel && currentModelAvailability" class="cp-model-status" :title="currentModelAvailability.reason">
             {{ currentModelAvailability.status === 'disabled' ? '已停用' : currentModelAvailability.status === 'degraded' ? (currentModelAvailability.reason || '受限') : '可用' }}
           </small>
@@ -4811,6 +4845,7 @@ const canSend = computed(
               :key="m.key"
               class="cp-pop-item"
               :class="{ active: cpState.modelKey === m.key }"
+              :title="m.rawLabel"
               @click="
                 switchModel(m.key);
                 openPop = ''
@@ -5314,7 +5349,26 @@ const canSend = computed(
 </template>
 
 <style scoped>
+.cp-progress-details { flex-shrink: 0; border: 0; background: transparent; color: var(--olive); font: inherit; cursor: pointer; padding: 2px 4px; }
+.cp-canvas-welcome { position: absolute; inset: 0; display: flex; flex-direction: column; justify-content: center; align-items: center; gap: 10px; pointer-events: none; color: var(--ink3); padding: 60px; text-align: center; }
+.cp-canvas-welcome > svg { width: 36px; height: 36px; opacity: .55; margin-bottom: 4px; }
+.cp-canvas-welcome strong { color: var(--ink2); font-size: 16px; font-weight: 500; }
+.cp-canvas-welcome span { font-size: 12px; line-height: 1.7; }
+.cp-history-filters { padding: 10px 16px; display: flex; flex-wrap: wrap; gap: 10px; align-items: center; border-bottom: 1px solid var(--line); }
+.cp-history-filters nav { display: flex; gap: 3px; }
+.cp-history-filters button { border: 0; border-radius: 6px; padding: 6px 9px; background: transparent; color: var(--ink2); font: inherit; font-size: 12px; cursor: pointer; }
+.cp-history-filters button[aria-pressed="true"] { background: var(--olive-pale); color: var(--olive); }
+.cp-history-filters input { flex: 1; min-width: 130px; width: 150px; height: 30px; padding: 0 8px; border: 1px solid var(--line); border-radius: 6px; background: var(--paper); color: var(--ink1); font: inherit; font-size: 12px; }
+.cp-task-overview { display: flex; gap: 12px; align-items: center; }
+.cp-task-overview-copy { min-width: 0; flex: 1; }
+.cp-task-model { margin-top: 4px; color: var(--ink3); font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cp-model-capabilities { flex: 0 0 auto; border-top: 1px solid var(--line); padding: 6px 16px; color: var(--ink2); font-size: 11px; }
+.cp-model-capabilities summary { cursor: pointer; width: fit-content; }
+.cp-model-capabilities summary span { color: var(--ink3); margin-left: 8px; }
+.cp-model-capabilities > div { display: flex; flex-wrap: wrap; gap: 6px 16px; padding-top: 7px; line-height: 1.6; }
+
 .cp {
+  container: creation-workspace / inline-size;
   display: flex;
   flex-direction: column;
   width: 100%;
@@ -5336,6 +5390,7 @@ const canSend = computed(
   padding: 0 10px 0 14px;
   border-bottom: 1px solid var(--jc-border);
   flex-shrink: 0;
+  background: var(--paper);
 }
 
 .cp-title {
@@ -5345,7 +5400,7 @@ const canSend = computed(
   min-width: 0;
   color: var(--ink1);
   font-size: 14px;
-  font-weight: 700;
+  font-weight: 600;
 }
 
 .cp-title > svg {
@@ -5355,6 +5410,7 @@ const canSend = computed(
   color: var(--ink2);
 }
 .cp-title-text {
+  max-width: 7em;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -5373,7 +5429,7 @@ const canSend = computed(
   padding: 0 8px;
   border: 0;
   border-radius: 7px;
-  background: var(--surface-alt);
+  background: transparent;
   color: var(--ink2);
   font: inherit;
   font-size: 12px;
@@ -5382,6 +5438,7 @@ const canSend = computed(
 }
 .cp-new-canvas { width: 32px; padding: 0; justify-content: center; }
 .cp-toolbar-actions { display: inline-flex; align-items: center; gap: 4px; flex: 0 0 auto; }
+.cp-task-count { display: inline-grid; min-width: 18px; height: 18px; padding: 0 4px; box-sizing: border-box; place-items: center; border-radius: 9px; background: var(--olive-pale); color: var(--olive); font-size: 11px; font-variant-numeric: tabular-nums; }
 .cp-erase-active { cursor: crosshair; }
 .cp-erase-preview {
   position: absolute;
@@ -5392,7 +5449,8 @@ const canSend = computed(
   border-radius: 2px;
 }
 .cp-canvas-picker { position: relative; min-width: 0; max-width: min(220px, 30vw); }
-.cp-canvas-trigger { display: flex; width: 100%; height: 28px; align-items: center; gap: 4px; padding: 0 8px; border: 1px solid var(--line); border-radius: 8px; background: var(--paper); color: var(--ink1); cursor: pointer; font: inherit; }
+.cp-canvas-trigger { display: flex; width: 100%; height: 32px; align-items: center; gap: 6px; padding: 0 9px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface-alt); color: var(--ink1); cursor: pointer; font: inherit; font-size: 13px; }
+.cp-canvas-trigger:hover, .cp-canvas-trigger[aria-expanded="true"] { border-color: var(--olive); }
 .cp-canvas-trigger > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .cp-canvas-menu { position: absolute; z-index: 60; top: calc(100% + 7px); left: 0; width: min(320px, 84vw); padding: 7px; border: 1px solid var(--line); border-radius: 8px; background: var(--paper); box-shadow: 0 12px 30px rgb(0 0 0 / 16%); }
 .cp-canvas-menu > input { width: 100%; height: 32px; padding: 0 9px; box-sizing: border-box; border: 1px solid var(--line); border-radius: 5px; outline: 0; background: var(--surface); color: var(--ink1); font: inherit; }
@@ -5499,11 +5557,16 @@ const canSend = computed(
 .cp-canvas-toolbar {
   position: absolute;
   top: 12px;
-  right: 0;
+  right: 12px;
   z-index: 20;
   display: flex;
   flex-direction: column;
   gap: 4px;
+  padding: 4px;
+  border: 1px solid var(--jc-border);
+  border-radius: 10px;
+  background: var(--paper);
+  box-shadow: var(--jc-shadow-sm);
 }
 .cp-canvas-toolbar button {
   width: 30px;
@@ -5607,7 +5670,8 @@ const canSend = computed(
   padding: 4px;
   border: 1px solid color-mix(in srgb, var(--jc-border) 78%, transparent);
   border-radius: 9px;
-  background: color-mix(in srgb, var(--jc-surface) 90%, transparent);
+  background: var(--paper);
+  box-shadow: var(--jc-shadow-sm);
   backdrop-filter: blur(10px);
 }
 .cp-canvas-view-controls button {
@@ -5978,13 +6042,14 @@ const canSend = computed(
   width: 100%;
   min-width: 0;
   box-sizing: border-box;
-  gap: 4px 8px;
-  padding: 6px 12px;
+  gap: 6px 8px;
+  padding: 10px 14px;
   border-top: 1px solid var(--line);
   flex-wrap: wrap;
   align-items: center;
   flex-shrink: 0;
   user-select: text;
+  background: var(--surface-alt);
 }
 .cp-island {
   position: relative;
@@ -6005,7 +6070,8 @@ const canSend = computed(
   padding: 3px 5px;
   background: transparent;
 }
-.cp-params > .cp-island-selector { border: 1px solid var(--jc-border); border-radius: 8px; padding: 5px 8px !important; background: var(--paper) !important; }
+.cp-params > .cp-island-selector { min-height: 32px; border: 1px solid var(--jc-border); border-radius: 8px; padding: 5px 9px !important; background: var(--paper) !important; }
+.cp-params > .cp-island-selector:hover, .cp-params > .cp-island-selector:focus-within { border-color: var(--olive); }
 .cp-island-selector > .cp-island-label { display: none; }
 .cp-island-selector:focus-visible { outline: 2px solid var(--olive); outline-offset: 2px; }
 .cp-params > .cp-island:not(.cp-rh-island):hover {
@@ -6063,8 +6129,8 @@ const canSend = computed(
   background: var(--paper);
   border: 1px solid var(--line);
   border-radius: 10px;
-  box-shadow: 0 -4px 16px rgba(0, 0, 0, 0.1);
-  padding: 4px;
+  box-shadow: var(--jc-shadow-lg);
+  padding: 5px;
   min-width: 140px;
   max-height: 300px;
   overflow-y: auto;
@@ -6073,11 +6139,11 @@ const canSend = computed(
 .cp-pop-item {
   display: block;
   width: 100%;
-  padding: 8px 12px;
+  padding: 9px 12px;
   border: none;
   background: none;
   text-align: left;
-  font-size: 12px;
+  font-size: 13px;
   cursor: pointer;
   border-radius: 6px;
   color: var(--ink1);
@@ -6193,7 +6259,7 @@ input.cp-dur-val {
   flex-direction: column;
   gap: 6px;
   padding: 10px 12px 12px;
-  border-top: 1px solid var(--line);
+  border-top: 0;
   flex-shrink: 0;
   background: var(--surface-alt);
 }
@@ -6292,7 +6358,7 @@ input.cp-dur-val {
   box-sizing: border-box;
   padding: 12px 14px;
   border: 1px solid var(--jc-border);
-  border-radius: 16px;
+  border-radius: 12px;
   background: var(--paper);
   box-shadow: 0 2px 8px rgb(36 42 32 / 3%);
   transition:
@@ -6613,7 +6679,7 @@ input.cp-dur-val {
 }
 .cp-send-btn.ready {
   background: var(--olive);
-  color: #fff;
+  color: var(--jc-on-primary);
   pointer-events: auto;
   animation: none;
 }
@@ -6637,13 +6703,24 @@ input.cp-dur-val {
   min-width: 16px;
   height: 16px;
   border-radius: 8px;
-  background: #ef4444;
-  color: #fff;
+  background: var(--paper);
+  color: var(--olive);
+  border: 1px solid var(--line);
   font-size: 10px;
   display: flex;
   align-items: center;
   justify-content: center;
   font-weight: 700;
+}
+
+.cp :is(button, [role="button"]):focus-visible { outline: 2px solid var(--jc-focus-ring); outline-offset: 2px; }
+.cp-canvas-toolbar button > svg { width: 18px; height: 18px; }
+@container creation-workspace (max-width: 640px) {
+  .cp-toolbar { padding: 0 10px; gap: 4px; }
+  .cp-title-text { display: none; }
+  .cp-canvas-picker { flex: 1; max-width: 200px; }
+  .cp-toolbar-link-text { display: none; }
+  .cp-toolbar-link { justify-content: center; min-width: 30px; padding: 0 6px; }
 }
 
 /* ═══ 移动端适配 (mobile-web) ═══ */

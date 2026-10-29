@@ -34,7 +34,10 @@ test('MCP tool calls use the tools/call method through the SDK', () => {
   assert.match(client, /timeout: TOOL_TIMEOUT/)
 })
 
-test('stdio MCP inherits the resolved binary directory in PATH', () => {
-  assert.match(rustMcp, /let mut paths = vec!\[bin_dir\.to_path_buf\(\)\]/)
-  assert.match(rustMcp, /cmd\.env\("PATH", path\)/)
+test('Windows stdio MCP resolves binaries and launches command wrappers with the background policy', () => {
+  assert.match(rustMcp, /let mut resolved_command = resolve_local_binary\(&command\)/)
+  assert.match(rustMcp, /Command::new\("cmd.exe"\)/)
+  assert.match(rustMcp, /Command::new\(&resolved_command\)/)
+  assert.match(rustMcp, /configure_background_command\(cmd.as_std_mut\(\)\)/)
+  assert.match(rustMcp, /cmd.envs\(env\)/)
 })
