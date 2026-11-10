@@ -394,7 +394,7 @@ async function migrateDocumentsCategoryColumn() {
   // 加列（不存在则加，SQLite 不支持 IF NOT EXISTS for ALTER TABLE，用 try/catch）
   try {
     await db.execute('ALTER TABLE documents ADD COLUMN category TEXT')
-  } catch (_) {
+  } catch {
     // 列已存在（可能是上次 ALTER 成功但 _migrations 写入失败）
   }
   await db.execute(
@@ -678,7 +678,7 @@ async function migrateWebLocalStorageToIndexedDb(): Promise<void> {
       const all = JSON.parse(raw)
       if (!all || typeof all !== 'object') continue
       for (const [id, record] of Object.entries(all as Record<string, any>)) {
-        await webPut(store, { ...(record || {}), id: String((record as any)?.id || id) })
+        await webPut(store, { ...record, id: String((record as any)?.id || id) })
       }
       localStorage.removeItem(storeKey)
     } catch (error) {
@@ -694,7 +694,7 @@ async function migrateWebLocalStorageToIndexedDb(): Promise<void> {
       const all = JSON.parse(raw)
       if (!all || typeof all !== 'object') continue
       for (const [id, record] of Object.entries(all as Record<string, any>)) {
-        await webPut(store, { ...(record || {}), id: String((record as any)?.id || id) })
+        await webPut(store, { ...record, id: String((record as any)?.id || id) })
       }
       localStorage.removeItem(storeKey)
     } catch (error) {
@@ -1094,7 +1094,7 @@ async function upsertConversationContextSqlRecord(storeName: string, value: any)
       await db.execute(
         `INSERT OR REPLACE INTO conversation_message_chunks (id, sessionId, messageId, role, chunkIndex, text, tokenCount, createdAt, metadata)
          VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
-        [value.id, value.sessionId, value.messageId, value.role, value.chunkIndex, value.text, value.tokenCount, value.createdAt, JSON.stringify({ ...(value.metadata || {}), parentMessageId: value.parentMessageId, startOffset: value.startOffset, endOffset: value.endOffset, semanticTitle: value.semanticTitle, semanticSummary: value.semanticSummary, contentKind: value.contentKind })],
+        [value.id, value.sessionId, value.messageId, value.role, value.chunkIndex, value.text, value.tokenCount, value.createdAt, JSON.stringify({ ...value.metadata, parentMessageId: value.parentMessageId, startOffset: value.startOffset, endOffset: value.endOffset, semanticTitle: value.semanticTitle, semanticSummary: value.semanticSummary, contentKind: value.contentKind })],
       )
       return
     case 'conversation_memory_items':

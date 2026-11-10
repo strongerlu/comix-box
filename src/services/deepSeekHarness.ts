@@ -1452,12 +1452,10 @@ async function createRuntime(input: DeepSeekHarnessInput): Promise<Runtime> {
     // 记一条 error，不把整轮对话判失败。写 true 时「创作 MCP 没起来」会升级成「任务失败」。
     '',
   ]
-  const mcpPatch = insertPatch([
-    ...mcpServerIds.flatMap((serverName, index) => mcpEntry(`mcp-proxy-${index}`, serverName, {
+  const mcpPatch = insertPatch(mcpServerIds.flatMap((serverName, index) => mcpEntry(`mcp-proxy-${index}`, serverName, {
       JIUCAIHEZI_PROXY_MCP_SERVER: serverName,
       JIUCAIHEZI_BRIDGE_DISCOVERY: mcpLaunch!.env.JIUCAIHEZI_BRIDGE_DISCOVERY,
-    })),
-  ])
+    })))
   const nativeToolCapabilities = [...localCapabilities, ...(needsCreation ? ['av'] : [])]
   const nativeToolPatch = nativeToolsEnabled ? insertPatch([
     '- id: jiucaihezi-native-tools',

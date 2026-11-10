@@ -46,7 +46,7 @@ test('源流面板目录是标记包裹的纯 JSON，六型号与截图规格一
     assert.equal(model.group, '源流 AI')
   }
   assert.deepEqual(Object.fromEntries(models.map(model => [model.name, model.upstream])), mapping)
-  assert.deepEqual([...plugin.meta.models].sort(), [...Object.keys(mapping)].sort())
+  assert.deepEqual([...plugin.meta.models].sort(), Object.keys(mapping).sort())
 })
 
 test('插件校验由目录推导：比例、画质、时长、素材上限', () => {

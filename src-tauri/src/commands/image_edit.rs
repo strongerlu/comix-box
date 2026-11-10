@@ -53,7 +53,7 @@ pub struct EraseImageRegionOutput {
     pub pixels_base64: String,
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn erase_image_region(
     input: EraseImageRegionInput,
 ) -> Result<EraseImageRegionOutput, String> {

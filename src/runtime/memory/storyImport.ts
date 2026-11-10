@@ -1,9 +1,8 @@
 import type { ProjectFileService } from '@/services/projectFileService'
-import type { ProjectResource, ProjectTextRead } from '@/utils/projectResource'
+import type { ProjectTextRead } from '@/utils/projectResource'
 import {
   buildMarkdownSplitPlan,
   hashText,
-  isStoryChapterBoundary,
   isStoryNumberedBoundary,
   storyChapterIndexes,
   normalizeStoryMarker,

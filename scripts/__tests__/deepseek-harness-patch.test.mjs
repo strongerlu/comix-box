@@ -27,7 +27,7 @@ test('the prepared Harness vendor patch carries the permission request', () => {
   assert.match(once, /case "session\/permission": return this\.permission\(params\);/)
   // 同一处 inject 必须同时带 `commands`（权限）与 `skills`（点名 skill 要查官方注册表）。
   assert.match(once, /const inject = \["agents", "workingDirectory", "sessionQuery", "commands", "skills", "storageDomain", "sessionTitle", "sessionProjections", "sessions", "tools"\];/)
-  assert.match(once, /\"\/permission \" \+ preset/)
+  assert.match(once, /"\/permission " \+ preset/)
   // 官方命令面必须真的被调用，而不是自己写 permission/preset 事件绕过官方推导。
   assert.match(once, /this\.ctx\.get\("commands"\)\.execute\(agent/)
   // 点名 Skill 只绑定内置版本，不能屏蔽官方加载器。
@@ -87,7 +87,7 @@ test('Harness installs dependent session methods on a fresh SDK layout', () => {
     writeFileSync(join(harness, 'node_modules/node/bin', process.platform === 'win32' ? 'node.exe' : 'node'), '')
     let source = readFileSync(serverPath, 'utf8').replace('source: { kind: "user", ...productionSource(params, rec.handle.agent) }', 'source: { kind: "user" }')
     for (const method of ['cancelSession', 'updateQueue', 'permission', 'approval']) {
-      source = source.replace(new RegExp(`\\tasync ${method}\\(params\\) \{[\\s\\S]*?(?=\\t(?:async |assertLiveAgent\\())`), '')
+      source = source.replace(new RegExp(`\\tasync ${method}\\(params\\) {[\\s\\S]*?(?=\\t(?:async |assertLiveAgent\\())`), '')
     }
     copyFileSync(serverPath.replace('dsh-sdk-jsonrpc-server', 'dsh-skill'), join(sdk, 'dsh-skill/lib/index.js'))
     for (const pkg of ['dsh-tool-fs-search', 'dsh-goal-round-driver', 'dsh-agent-loop', 'dsh-tool-skill']) {

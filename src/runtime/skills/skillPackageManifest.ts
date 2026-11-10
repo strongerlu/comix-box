@@ -13,7 +13,7 @@ export interface SkillPackageManifest {
 
 const QUOTED_PACKAGE_PATH = /[`'"]((?:references|scripts|assets|agents|eval-viewer)\/[^`'"\r\n]+)[`'"]/gmu
 const MARKDOWN_PACKAGE_PATH = /\]\(((?:references|scripts|assets|agents|eval-viewer)\/[^)\r\n]+)\)/gmu
-const PLAIN_PACKAGE_PATH = /(?:^|[\s(\[])((?:references|scripts|assets|agents|eval-viewer)\/[^\s`'"),\]:；，。]+)/gmu
+const PLAIN_PACKAGE_PATH = /(?:^|[\s([])((?:references|scripts|assets|agents|eval-viewer)\/[^\s`'"),\]:；，。]+)/gmu
 // 文档里的示例/占位写法（references/{相术类型}.md、scripts/<name>.py）不是真实依赖
 const PLACEHOLDER_PACKAGE_PATH = /[<>{}*$]/
 

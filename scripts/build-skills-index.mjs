@@ -3,7 +3,7 @@
 // Called during build (vite build pipeline)
 // Scans public/skills/*/SKILL.md, extracts YAML frontmatter, outputs index.json
 
-import { readFileSync, readdirSync, existsSync, writeFileSync } from 'node:fs'
+import { readFileSync, readdirSync, writeFileSync } from 'node:fs'
 import { join, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
 

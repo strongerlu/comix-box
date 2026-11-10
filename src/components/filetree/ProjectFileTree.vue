@@ -16,26 +16,32 @@ import { useProjectStore } from '@/stores/projectStore'
 import { useMediaTaskStore } from '@/stores/mediaTaskStore'
 import { consumeLastEvent, emitEvent, emitEventAsync, onEvent } from '@/utils/eventBus'
 import { isTauriMobileRuntime, isTauriRuntime } from '@/utils/tauriEnv'
-import { searchItems } from '@/utils/generalSearch'
 import { confirmAction } from '@/utils/confirmAction'
 import { safePrompt } from '@/utils/safePrompt'
-import {
-  fileNameTaskSuffix,
-  mediaKindOf,
-  planMediaReorder,
-  temporaryReorderName,
-  type MediaReorderMode,
-  type MediaReorderPlan,
-} from '@/utils/mediaReorder'
+import { fileNameTaskSuffix, mediaKindOf } from '@/utils/mediaReorder'
+import { useMediaReorder } from './useMediaReorder'
 import { canvasFilePath } from '@/components/canvas/canvasDocument'
 import {
-  compareFileEntries,
   fileSortLabel,
   isFileSortMode,
   DEFAULT_FILE_SORT_MODE,
   FILE_SORT_OPTIONS,
   type FileSortMode,
 } from '@/utils/fileSort'
+import {
+  buildSearchTree,
+  buildTree,
+  flattenVisible,
+  sortTreeChildren,
+  type TreeNode,
+  type VisibleNode,
+} from './projectTree'
+import {
+  clipboardFor,
+  followResourceChange,
+  isCutPath,
+  type ProjectResourceClipboard,
+} from './resourceClipboard'
 import { WEB_PROJECT_FILES_CHANNEL, webProjectFiles } from '@/utils/webProjectFiles'
 import { buildSaveDialogFilters, saveGeneratedFile } from '@/utils/exportSave'
 import { isTextFile, SUPPORTED_TEXT_EXT } from '@/utils/fileProcessor'
@@ -84,35 +90,6 @@ import {
   memoryMediaDirectoryFor,
 } from '@/utils/memoryProjectPaths'
 
-interface FlatEntry {
-  id?: string
-  path: string
-  isDir: boolean
-  size: number | null
-  updatedAt?: number
-  mimeType?: string
-  content?: string
-}
-interface TreeNode {
-  id?: string
-  name: string
-  path: string
-  isDir: boolean
-  size?: number
-  updatedAt?: number
-  mimeType?: string
-  content?: string
-  children: TreeNode[]
-  expanded: boolean
-  loaded: boolean
-  depth: number
-}
-interface VisibleNode {
-  node: TreeNode
-  indent: number
-  hasChildren: boolean
-  isExpanded: boolean
-}
 interface CtxMenu {
   show: boolean
   x: number
@@ -147,13 +124,6 @@ interface DirectoryExportHandle {
 interface DirectoryPickerWindow {
   showDirectoryPicker?: (options?: { mode: 'read' | 'readwrite' }) => Promise<DirectoryExportHandle>
 }
-interface ProjectResourceClipboard {
-  owner: string
-  runtime: ProjectResource['runtime']
-  mode: 'copy' | 'cut'
-  roots: ProjectResource[]
-}
-
 const projectStore = useProjectStore()
 const mediaTaskStore = useMediaTaskStore()
 const projectFiles = createRuntimeProjectFileService()
@@ -259,24 +229,6 @@ const storyImportNamesExpanded = ref(false)
 let storyImportRequestId = 0
 let storyImportMarkerTimer: ReturnType<typeof setTimeout> | null = null
 
-/* ─── 构建树 ─── */
-/**
- * 同级排序：目录优先；同级目录按最后修改时间倒序（刚建的、刚动过的在最上面），
- * 文件按名字——文件必须按名字才能对上编号顺序。
- *
- * 这是加载时的基础顺序；屏幕上的实际顺序由 `sortedChildren()` 按用户选的排序模式决定。
- */
-function sortTreeChildren<T extends { isDir: boolean; path: string; updatedAt?: number }>(children: T[]): T[] {
-  return children.sort((a, b) => {
-    if (a.isDir !== b.isDir) return a.isDir ? -1 : 1
-    if (a.isDir) {
-      const timeDiff = (b.updatedAt ?? 0) - (a.updatedAt ?? 0)
-      if (timeDiff !== 0) return timeDiff
-    }
-    return a.path.localeCompare(b.path)
-  })
-}
-
 /** 排序模式持久化在本地；不合法（版本变更、手改）或读不到就回默认值。 */
 function readStoredFileSortMode(): FileSortMode {
   try {
@@ -293,103 +245,9 @@ function setFileSortMode(mode: FileSortMode) {
     localStorage.setItem(FILE_SORT_STORAGE_KEY, mode)
   } catch { /* 隐私模式下写不进 localStorage，本次会话仍生效 */ }
 }
-function buildTree(entries: FlatEntry[], rootPath: string): TreeNode {
-  const root: TreeNode = {
-    name: rootPath.split('/').filter(Boolean).pop() || rootPath,
-    path: '',
-    isDir: true,
-    children: [],
-    expanded: true,
-    loaded: true,
-    depth: 0,
-  }
-  const nodeMap = new Map<string, TreeNode>()
-  nodeMap.set('', root)
-  for (const e of entries) {
-    const parts = e.path.split('/')
-    const n: TreeNode = {
-      id: e.id,
-      name: parts[parts.length - 1],
-      path: e.path,
-      isDir: e.isDir,
-      size: e.size ?? undefined,
-      updatedAt: e.updatedAt,
-      mimeType: e.mimeType,
-      content: e.content,
-      children: [],
-      expanded: false,
-      loaded: !e.isDir,
-      depth: parts.length,
-    }
-    const p = nodeMap.get(parts.slice(0, -1).join('/'))
-    if (p) p.children.push(n)
-    if (e.isDir) nodeMap.set(e.path, n)
-  }
-  // 按父逐个排序，而不是把扁平列表整体排——否则子目录可能排到父目录之前而丢掉。
-  for (const node of nodeMap.values()) sortTreeChildren(node.children)
-  return root
-}
-function buildSearchTree(resources: ProjectResource[], rootPath: string): TreeNode {
-  const entries = new Map<string, FlatEntry>()
-  for (const resource of resources) {
-    const parts = resource.path.split('/')
-    for (let index = 1; index < parts.length; index++) {
-      const path = parts.slice(0, index).join('/')
-      entries.set(path, { path, isDir: true, size: null })
-    }
-    entries.set(resource.path, {
-      id: resource.id,
-      path: resource.path,
-      isDir: resource.isDirectory,
-      size: resource.size ?? null,
-      updatedAt: resource.updatedAt,
-      mimeType: resource.mimeType,
-    })
-  }
-  return buildTree([...entries.values()], rootPath)
-}
-
-/* ─── 模糊筛选（fuzzysort + 拼音） ─── */
-function fuzzyMatch(name: string, query: string): boolean {
-  const q = query.trim()
-  if (!q) return true
-  // ponytail: searchItems 带拼音增强，打 "juese" 匹配「角色设计」
-  return searchItems(q, [{ name }]).length > 0
-}
-function nodeMatchesFilter(node: TreeNode, q: string): boolean {
-  return (
-    fuzzyMatch(node.name, q) || (node.isDir && node.children.some(c => nodeMatchesFilter(c, q)))
-  )
-}
-function flattenVisible(root: TreeNode | null, filter: string): VisibleNode[] {
-  if (!root) return []
-  const result: VisibleNode[] = []
-  const q = filter.trim()
-  const mode = fileSortMode.value
-  function walk(node: TreeNode) {
-    if (!q || fuzzyMatch(node.name, q) || node.children.some(c => nodeMatchesFilter(c, q))) {
-      result.push({ node, indent: node.depth, hasChildren: node.isDir, isExpanded: node.expanded })
-      if (node.expanded && node.isDir) for (const child of sortedChildren(node.children, mode)) walk(child)
-    }
-  }
-  for (const child of sortedChildren(root.children, mode)) walk(child)
-  return result
-}
-
-/**
- * 屏幕顺序的唯一真源：目录永远优先（混排会把目录冲散，nodeMap 找不到父节点会静默丢节点），
- * 同级再按当前模式。排序放在展开视图这一步而不是加载时：换排序不用重读目录，
- * 也不会漏掉 buildTree / ensureDirectoryLoaded / refreshDirectory 里某一条加载路径。
- */
-function sortedChildren(children: TreeNode[], mode: FileSortMode): TreeNode[] {
-  return children.slice().sort((a, b) => {
-    if (a.isDir !== b.isDir) return a.isDir ? -1 : 1
-    return compareFileEntries(a, b, mode)
-  })
-}
 const visibleNodes = computed(() => {
   const root = filterQuery.value.trim() ? searchTree.value : treeRoot.value
-  return root ? flattenVisible(root, filterQuery.value) : []
+  return root ? flattenVisible(root, filterQuery.value, fileSortMode.value) : []
 })
 const fileTreeVirtualizer = useVirtualizer(
   computed(() => ({
@@ -639,34 +497,7 @@ const offProjectResourceChanged = onProjectResourceChange(change => {
         selectedPath.value = null
       if (entry.type === 'deleted' && focusedPath.value === entry.resource.path)
         focusedPath.value = null
-      const clipboard = resourceClipboard.value
-      if (clipboard && clipboard.owner === entry.resource.owner) {
-        if (
-          entry.type === 'deleted' &&
-          clipboard.roots.some(
-            resource =>
-              resource.path === entry.resource.path ||
-              resource.path.startsWith(`${entry.resource.path}/`),
-          )
-        )
-          resourceClipboard.value = null
-        if (entry.type === 'renamed')
-          resourceClipboard.value = {
-            ...clipboard,
-            roots: clipboard.roots.map(resource =>
-              resource.path === entry.oldResource.path ||
-              resource.path.startsWith(`${entry.oldResource.path}/`)
-                ? {
-                    ...resource,
-                    path: `${entry.resource.path}${resource.path.slice(entry.oldResource.path.length)}`,
-                    name: `${entry.resource.path}${resource.path.slice(entry.oldResource.path.length)}`
-                      .split('/')
-                      .pop()!,
-                  }
-                : resource,
-            ),
-          }
-      }
+      resourceClipboard.value = followResourceChange(resourceClipboard.value, entry)
     }
     if (entry.resource.owner !== projectKey.value) continue
     // 内容保存不改变目录结构。重建懒加载树会丢失展开状态。
@@ -1023,46 +854,24 @@ async function ctxCopyRelativePath() {
     }
   closeCtxMenu()
 }
-function ctxCopyResources() {
+function placeSelectionOnClipboard(mode: ProjectResourceClipboard['mode']) {
   const roots = selectedResources()
   if (roots.some(resource => isProtectedMemoryPath(resource.path))) {
     errorMsg.value = '系统骨架及对话、画布记录只能由 App 管理'
     closeCtxMenu()
     return
   }
-  if (roots.length)
-    resourceClipboard.value = {
-      owner: roots[0].owner,
-      runtime: roots[0].runtime,
-      mode: 'copy',
-      roots,
-    }
+  if (roots.length) resourceClipboard.value = clipboardFor(roots, mode)
   closeCtxMenu()
+}
+function ctxCopyResources() {
+  placeSelectionOnClipboard('copy')
 }
 function ctxCutResources() {
-  const roots = selectedResources()
-  if (roots.some(resource => isProtectedMemoryPath(resource.path))) {
-    errorMsg.value = '系统骨架及对话、画布记录只能由 App 管理'
-    closeCtxMenu()
-    return
-  }
-  if (roots.length)
-    resourceClipboard.value = {
-      owner: roots[0].owner,
-      runtime: roots[0].runtime,
-      mode: 'cut',
-      roots,
-    }
-  closeCtxMenu()
+  placeSelectionOnClipboard('cut')
 }
 function isCutResource(path: string): boolean {
-  const clipboard = resourceClipboard.value
-  return Boolean(
-    clipboard?.mode === 'cut' &&
-    clipboard.roots.some(
-      root => path === root.path || (root.isDirectory && path.startsWith(`${root.path}/`)),
-    ),
-  )
+  return isCutPath(resourceClipboard.value, path)
 }
 async function prepareBatchCanvasLifecycle(
   plan: Awaited<ReturnType<typeof projectFiles.planBatch>>,
@@ -1758,14 +1567,6 @@ async function ctxMoveToNewFolder() {
 }
 
 /* ─── 媒体排序编号 ─── */
-const mediaReorderFolder = ref<{ path: string; name: string } | null>(null)
-const mediaReorderItems = ref<ProjectResource[]>([])
-const mediaReorderPlan = ref<MediaReorderPlan | null>(null)
-const mediaReorderMode = ref<MediaReorderMode>('respect')
-const mediaReorderBusy = ref(false)
-/** null = 还没数出来（此时先允许入口），否则为目录内媒体文件数。 */
-const mediaReorderAvailable = ref<number | null>(null)
-
 function taskNameSuffix(taskId: string): string {
   return String(taskId || '')
     .replace(/[^a-z0-9]/gi, '')
@@ -1780,121 +1581,33 @@ function mediaCreatedAtOf(name: string): number | undefined {
   return mediaTaskStore.tasks.find(task => taskNameSuffix(task.id) === suffix)?.createdAt
 }
 
-function buildMediaReorderPlan(): MediaReorderPlan {
-  return planMediaReorder({
-    resources: mediaReorderItems.value,
-    baseName: mediaReorderFolder.value?.name || '',
-    createdAtOf: (_path, name) => mediaCreatedAtOf(name),
-    mode: mediaReorderMode.value,
-    isProtected: isProtectedMemoryPath,
-  })
-}
-
-async function refreshMediaReorderAvailability(node: TreeNode | null) {
-  mediaReorderAvailable.value = null
-  const owner = projectKey.value
-  if (!owner || !node?.isDir) return
-  try {
-    const children = (await projectFiles.listDirectory(owner, node.path)).filter(resource =>
-      isVisibleMemoryResource(resource.path),
-    )
-    if (projectKey.value !== owner || ctxMenu.value.node?.path !== node.path) return
-    mediaReorderAvailable.value = children.filter(
-      resource => !resource.isDirectory && mediaKindOf(resource.path, resource.mimeType) !== null,
-    ).length
-  } catch {
-    mediaReorderAvailable.value = null
-  }
-}
+const {
+  mediaReorderFolder,
+  mediaReorderPlan,
+  mediaReorderMode,
+  mediaReorderBusy,
+  mediaReorderAvailable,
+  refreshAvailability: refreshMediaReorderAvailability,
+  open: openMediaReorder,
+  setMode: setMediaReorderMode,
+  cancel: cancelMediaReorder,
+  confirm: confirmMediaReorder,
+} = useMediaReorder({
+  owner: () => projectKey.value,
+  listDirectory: (owner, path) => projectFiles.listDirectory(owner, path),
+  rename: (resource, name) => projectFiles.rename(resource, name),
+  isVisible: isVisibleMemoryResource,
+  isProtected: isProtectedMemoryPath,
+  createdAtOf: mediaCreatedAtOf,
+  isMenuTarget: path => ctxMenu.value.node?.path === path,
+  setError: message => { errorMsg.value = message },
+  setStatus: message => { statusMsg.value = message },
+})
 
 async function ctxReorderMedia() {
   const node = ctxMenu.value.node
   closeCtxMenu()
-  const owner = projectKey.value
-  if (!node?.isDir || !owner) return
-  errorMsg.value = ''
-  statusMsg.value = ''
-  try {
-    const children = (await projectFiles.listDirectory(owner, node.path)).filter(resource =>
-      isVisibleMemoryResource(resource.path),
-    )
-    if (projectKey.value !== owner) return
-    mediaReorderItems.value = children
-    mediaReorderFolder.value = { path: node.path, name: node.name }
-    const plan = buildMediaReorderPlan()
-    if (!plan.renames.length) {
-      const hasMedia = children.some(
-        resource => !resource.isDirectory && mediaKindOf(resource.path, resource.mimeType) !== null,
-      )
-      errorMsg.value = hasMedia
-        ? `该文件夹的媒体文件已经是「编号_${node.name}」格式。`
-        : '该文件夹没有可编号的媒体文件。'
-      mediaReorderItems.value = []
-      mediaReorderFolder.value = null
-      return
-    }
-    mediaReorderPlan.value = plan
-  } catch (error) {
-    errorMsg.value = `读取文件夹失败: ${error instanceof Error ? error.message : String(error)}`
-  }
-}
-
-function setMediaReorderMode(mode: MediaReorderMode) {
-  mediaReorderMode.value = mode
-  mediaReorderPlan.value = buildMediaReorderPlan()
-}
-
-function cancelMediaReorder() {
-  if (mediaReorderBusy.value) return
-  mediaReorderFolder.value = null
-  mediaReorderPlan.value = null
-  mediaReorderItems.value = []
-}
-
-async function confirmMediaReorder() {
-  const plan = mediaReorderPlan.value
-  const folder = mediaReorderFolder.value
-  const owner = projectKey.value
-  if (!plan || !folder || !owner || mediaReorderBusy.value) return
-  const byPath = new Map(mediaReorderItems.value.map(resource => [resource.path, resource]))
-  const requested = plan.renames
-  if (!requested.length) return
-  mediaReorderBusy.value = true
-  let done = 0
-  let failure = ''
-  try {
-    // 交换型重名：先只把涉事的文件改成临时名，再统一落到最终名。
-    const staged = new Map<string, ProjectResource>()
-    if (plan.needsTempPass) {
-      for (const [index, rename] of requested.entries()) {
-        const involved = plan.conflicts.some(
-          conflict => conflict.path === rename.path || conflict.holderPath === rename.path,
-        )
-        const source = byPath.get(rename.path)
-        if (!involved || !source) continue
-        staged.set(rename.path, await projectFiles.rename(source, temporaryReorderName(index + 1, source.name)))
-      }
-    }
-    for (const rename of requested) {
-      const source = staged.get(rename.path) || byPath.get(rename.path)
-      if (!source) continue
-      await projectFiles.rename(source, rename.nextName)
-      done += 1
-    }
-  } catch (error) {
-    failure = error instanceof Error ? error.message : String(error)
-  } finally {
-    mediaReorderBusy.value = false
-    mediaReorderFolder.value = null
-    mediaReorderPlan.value = null
-    mediaReorderItems.value = []
-  }
-  if (failure) {
-    const stagedHint = plan.needsTempPass ? '；若有文件停留在 __pft_reorder_tmp_ 临时名，请手动改回或重新编号' : ''
-    errorMsg.value = `已编号 ${done}/${requested.length} 个，随后失败：${failure}${stagedHint}`
-    return
-  }
-  statusMsg.value = `${folder.name}：已为 ${done} 个媒体文件编号`
+  await openMediaReorder(node)
 }
 
 function cancelDelete() {
@@ -2757,13 +2470,7 @@ function onNodeDrop(event: DragEvent, node: TreeNode) {
 function onNodeDragStart(event: DragEvent, node: TreeNode) {
   selectTreeNode(node)
   const roots = selectedResources()
-  if (roots.length)
-    resourceClipboard.value = {
-      owner: roots[0].owner,
-      runtime: roots[0].runtime,
-      mode: 'cut',
-      roots,
-    }
+  if (roots.length) resourceClipboard.value = clipboardFor(roots, 'cut')
   event.dataTransfer?.setData('application/x-jc-project-resources', node.path)
   if (isCanvasMediaFile(node)) {
     event.dataTransfer?.setData(

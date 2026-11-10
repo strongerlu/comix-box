@@ -1,6 +1,6 @@
 import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
-import { getItem, setItem, removeItem, initDB } from '@/utils/idb'
+import { getItem, setItem, initDB } from '@/utils/idb'
 
 // ─── Types ───────────────────────────────────────────
 

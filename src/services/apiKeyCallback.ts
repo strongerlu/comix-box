@@ -15,7 +15,6 @@ function stripCallbackKeyParams(href: string, replaceState?: (url: string) => vo
     const url = new URL(String(href || ''), 'tauri://localhost/index.html')
     const hasCallbackKeyParam = CALLBACK_KEY_NAMES.some(name => url.searchParams.has(name))
     if (!hasCallbackKeyParam) return false
-    let changed = true
     for (const name of CALLBACK_KEY_NAMES) {
       url.searchParams.delete(name)
     }

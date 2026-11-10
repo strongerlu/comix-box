@@ -69,7 +69,7 @@ export async function resolveApiConfig(options: ResolveApiConfigOptions = {}): P
       config.apiKey = shared.apiKey || config.apiKey
       config.apiBase = resolveWebApiBaseUrl(DEFAULT_PROVIDER_HOST)
       if (!options.modelId) config.model = shared.model || config.model
-    } catch (_) {}
+    } catch {}
   }
 
   const provider = resolveDefaultProviderFromStorage()
@@ -172,11 +172,11 @@ export function sanitizeProviderError(value: unknown, apiKey = ''): string {
   }
   return text
     .replace(/Authorization\s*:\s*Bearer\s+[A-Za-z0-9._~+/=-]{12,}/gi, 'Authorization: Bearer [REDACTED_API_KEY]')
-    .replace(/Bearer\s+(?:sk|jc|or|wr)-[A-Za-z0-9_\-]{12,}/gi, 'Bearer [REDACTED_API_KEY]')
-    .replace(/\b(?:sk|jc|or|wr)-[A-Za-z0-9_\-]{20,}\b/gi, '[REDACTED_API_KEY]')
+    .replace(/Bearer\s+(?:sk|jc|or|wr)-[A-Za-z0-9_-]{12,}/gi, 'Bearer [REDACTED_API_KEY]')
+    .replace(/\b(?:sk|jc|or|wr)-[A-Za-z0-9_-]{20,}\b/gi, '[REDACTED_API_KEY]')
     .replace(/\bx-api-key\s*:\s*[A-Za-z0-9._~+/=-]{12,}/gi, 'x-api-key: [REDACTED_API_KEY]')
     .replace(/\bapi[_-]?key\s*[=:]\s*['"]?[A-Za-z0-9._~+/=-]{16,}['"]?/gi, 'api_key=[REDACTED_API_KEY]')
-    .replace(/\beyJ[A-Za-z0-9_\-]{3,}\.[A-Za-z0-9_\-]{3,}\.[A-Za-z0-9_\-]{3,}\b/g, '[REDACTED_JWT]')
+    .replace(/\beyJ[A-Za-z0-9_-]{3,}\.[A-Za-z0-9_-]{3,}\.[A-Za-z0-9_-]{3,}\b/g, '[REDACTED_JWT]')
     .replace(/data:[^,\s]+;base64,[A-Za-z0-9+/_=-]+(?:\r?\n[A-Za-z0-9+/_=-]+)*/gi, '[REDACTED_DATA_URL]')
     .replace(/(^|[^A-Za-z0-9+/_-])((?:[A-Za-z0-9+/]{60,}={0,2}\r?\n)+[A-Za-z0-9+/]{20,}={0,2})($|[^A-Za-z0-9+/_=-])/g, '$1[REDACTED_BASE64]$3')
     .replace(/(^|[^A-Za-z0-9+/_-])([A-Za-z0-9+/]{80,}={0,2})($|[^A-Za-z0-9+/_=-])/g, '$1[REDACTED_BASE64]$3')

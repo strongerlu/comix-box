@@ -1,4 +1,4 @@
-import { ref, computed, watch, type Ref, shallowRef } from 'vue'
+import { ref, watch, type Ref, shallowRef } from 'vue'
 import fuzzysort from 'fuzzysort'
 
 export interface FilteredListProps<T> {

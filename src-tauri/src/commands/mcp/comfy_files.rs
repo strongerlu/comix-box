@@ -31,7 +31,7 @@ fn write_input(root: &Path, id: &str, name: &str, data: &str) -> Result<String, 
     Ok(path.to_string_lossy().into_owned())
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn comfy_mcp_write_input(app: tauri::AppHandle, id: String, name: String, data_base64: String) -> Result<String, String> {
     let root: PathBuf = app.path().app_data_dir().map_err(|e| e.to_string())?.join("comfy-mcp");
     write_input(&root, &id, &name, &data_base64)
@@ -98,7 +98,7 @@ pub fn comfy_mcp_remove_workflow(app: tauri::AppHandle, id: String) -> Result<()
     remove_workflow(&root, &id)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn comfy_mcp_read_output(app: tauri::AppHandle, path: String) -> Result<String, String> {
     let root = app.path().app_data_dir().map_err(|e| e.to_string())?.join("comfy-mcp");
     read_output(&root, Path::new(&path))

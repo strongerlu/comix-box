@@ -576,7 +576,7 @@ test('Harness keeps its runtime state in app data instead of the user project', 
   // 匹配**已有**行，匹配不到就 warn + skip。MCP 条目曾经写成顶层 `- id:`，于是创作 /
   // 媒体 / 3D / 自定义 MCP 在 Harness 会话里从来没有挂上过（--dump-config 实测命中 0）。
   assert.match(source, /const insertPatch = \(entries: string\[\]\)/)
-  assert.match(source, /const mcpPatch = insertPatch\(\[/)
+  assert.match(source, /const mcpPatch = insertPatch\(/)
   assert.match(source, /const fileReferencePatch = insertPatch\(\[/)
   assert.match(source, /'@deepseek-ai\/dsh-file-reference-local'/)
   // MCP 起不来只降级成「那台服务器的工具不出现」，不能把整轮对话判失败。

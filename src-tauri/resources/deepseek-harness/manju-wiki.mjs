@@ -155,7 +155,7 @@ function safeName(value, field) {
     .normalize('NFC')
     .trim()
     .replace(/[<>:"/\\|?*\u0000-\u001f\u007f]/g, '-')
-    .replace(/[\[\]#%]/g, '-')
+    .replace(/[[\]#%]/g, '-')
     .replace(/\s+/gu, '-')
     .replace(/^\.+/, '')
     .replace(/[. ]+$/g, '')
@@ -788,13 +788,13 @@ async function requirePipelineReads(ctx, args, exec, agent) {
     return exact.length || category === '人物小传' || category === '道具说明' ? exact : paths
   }
   const groups = {
-    summary: materials.filter(path => /\/故事梗概\.md$/.test(path)),
+    summary: materials.filter(path => path.endsWith('/故事梗概.md')),
     style: Object.keys(state.files?.style || {}).filter(path => path === `${root}/项目风格/影片比例与风格.md`), source: [state.source_path],
     bio: candidates('人物小传'), scene: candidates('场景说明'), prop: candidates('道具说明'),
     // 三格格式提示词可由已读的角色设计提示词，或（全自动成片一步出格式时）已读的人物小传支撑。
     image: [`${root}/资产/角色/${entity}/角色生图提示词.md`, ...candidates('人物小传')],
-    engineering: Object.keys(state.files?.engineering || {}).filter(path => /工程剧本\.md$/.test(path)),
-    engineeringOrStoryboard: Object.keys(state.files?.engineering || {}).filter(path => /工程剧本\.md$/.test(path)),
+    engineering: Object.keys(state.files?.engineering || {}).filter(path => path.endsWith('工程剧本.md')),
+    engineeringOrStoryboard: Object.keys(state.files?.engineering || {}).filter(path => path.endsWith('工程剧本.md')),
   }
   const cwd = exec.agent.session.header.cwd
   const observed = async path => {
@@ -921,7 +921,7 @@ async function pipelineCheckpoint(ctx, args, exec, cwd, workspace, wikiRoot, spe
   const duration = input.duration_seconds ?? state.duration_seconds
   if (stage >= 4 && (!Number.isFinite(duration) || duration <= 0)) throw new Error('工程阶段必须提供有效总时长预算duration_seconds')
   if (input.stage === 'engineering') {
-    const path = input.outputs.find(path => /工程剧本\.md$/.test(path))
+    const path = input.outputs.find(path => path.endsWith('工程剧本.md'))
     if (!path) throw new Error('工程阶段缺少工程剧本')
     const text = await ctx.fs.readText(await projectTarget(ctx, cwd, path, exec.signal, workspace), exec.signal)
     if (!/资产清单/.test(text) || !/比例/.test(text)) throw new Error('工程剧本缺少影片比例或整集资产清单')
@@ -1113,7 +1113,7 @@ async function adaptationCheckpoint(ctx, args, exec, root, content, agent) {
     outputs[path] = (await adaptationFile(ctx, exec, path, agent)).hash
   }
   if (stage > 0 && stage < 5 && !Object.keys(outputs).length) throw new Error('阶段没有实际产物')
-  if (stage === 1 && !input.outputs.some(path => /项目资料\/原作\/故事梗概\.md$/.test(path))) throw new Error('资料阶段缺少原作梗概')
+  if (stage === 1 && !input.outputs.some(path => path.endsWith('项目资料/原作/故事梗概.md'))) throw new Error('资料阶段缺少原作梗概')
   if (stage === 2 && !outputs[`${root}/改编方案/项目总纲.md`]) throw new Error('方案阶段缺少项目总纲')
   const episodes = stage === 3 ? input.episodes : state.episodes
   if (stage >= 3) {

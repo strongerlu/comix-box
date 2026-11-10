@@ -1726,7 +1726,7 @@ test('runDirectChatCompletion compacts prior tool rounds when enabled', async ()
                     {
                       index: 0,
                       id: `call_${round}`,
-                      function: { name: 'read', arguments: `{\"path\":\"${round}\"}` },
+                      function: { name: 'read', arguments: `{"path":"${round}"}` },
                     },
                   ],
                 },

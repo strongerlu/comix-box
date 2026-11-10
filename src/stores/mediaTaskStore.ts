@@ -515,9 +515,9 @@ async function validateTaskInputs(params: MediaTaskSubmitParams): Promise<void> 
     modelId: params.model,
     prompt: taskPrompt(params),
     data: {
-      ...(params.imageParams || {}),
-      ...(params.videoParams || {}),
-      ...(params.audioParams || {}),
+      ...params.imageParams,
+      ...params.videoParams,
+      ...params.audioParams,
     },
     images: media.images,
     videos: media.videos,
@@ -1423,9 +1423,9 @@ export const useMediaTaskStore = defineStore('mediaTasks', () => {
       directory,
       memory: params.memory,
       params: withoutInlineMedia({
-        ...(params.imageParams || {}),
-        ...(params.videoParams || {}),
-        ...(params.audioParams || {}),
+        ...params.imageParams,
+        ...params.videoParams,
+        ...params.audioParams,
       }),
       route: params.plan?.route,
       upstreamFamily: params.plan?.upstreamFamily,
@@ -1805,7 +1805,7 @@ export const useMediaTaskStore = defineStore('mediaTasks', () => {
               params.referenceImages && params.referenceImages.length > 1
                 ? params.referenceImages
                 : params.referenceImages?.[0],
-            ...(params.imageParams || {}),
+            ...params.imageParams,
             signal: controller.signal,
             onSubmitted: submitted => {
               markTaskSubmittedWithoutBlocking(task, submitted)
@@ -1825,7 +1825,7 @@ export const useMediaTaskStore = defineStore('mediaTasks', () => {
               params.referenceImages && params.referenceImages.length > 1
                 ? params.referenceImages
                 : undefined,
-            ...(params.videoParams || {}),
+            ...params.videoParams,
             signal: controller.signal,
             onSubmitted: submitted => {
               markTaskSubmittedWithoutBlocking(task, submitted)
@@ -1844,7 +1844,7 @@ export const useMediaTaskStore = defineStore('mediaTasks', () => {
           {
             model: params.model,
             prompt: params.prompt,
-            ...(params.audioParams || {}),
+            ...params.audioParams,
             signal: controller.signal,
             onSubmitted: submitted => {
               markTaskSubmittedWithoutBlocking(task, submitted)

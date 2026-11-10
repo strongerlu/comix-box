@@ -44,7 +44,7 @@ const TOOL_TIMEOUT = 120_000
 async function normalizeStdioConfig(config: McpServerConfig): Promise<McpServerConfig> {
   if (config.transport !== 'stdio' || !config.command) return config
   const command = config.command.replaceAll('\\', '/')
-  const isTsx = /(?:^|\/)tsx(?:\.cmd)?$/.test(command) || /\/tsx\/dist\/cli\.mjs$/.test(command)
+  const isTsx = /(?:^|\/)tsx(?:\.cmd)?$/.test(command) || command.endsWith('/tsx/dist/cli.mjs')
   const isNpx = /(?:^|\/)npx$/.test(command)
   if (!isTsx && !isNpx) return config
   let node = ''
@@ -53,11 +53,11 @@ async function normalizeStdioConfig(config: McpServerConfig): Promise<McpServerC
   if (!node) return config
   const args = [...(config.args || [])]
   if (isNpx) {
-    if (!/\/bin\/node$/.test(node)) return config
+    if (!node.endsWith('/bin/node')) return config
     const npxCli = node.replace(/\/bin\/node$/, '/lib/node_modules/npm/bin/npx-cli.js')
     return { ...config, command: node, args: [npxCli, ...args] }
   }
-  if (/\/tsx\/dist\/cli\.mjs$/.test(command)) args.unshift(config.command)
+  if (command.endsWith('/tsx/dist/cli.mjs')) args.unshift(config.command)
   else args.unshift(command)
   return { ...config, command: node, args }
 }

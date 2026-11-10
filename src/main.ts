@@ -47,12 +47,12 @@ try {
   if (theme && theme !== 'light') {
     document.documentElement.setAttribute('data-theme', theme)
   }
-} catch (_) {}
+} catch {}
 
 try {
   localStorage.removeItem('jcFontSize')
   document.documentElement.style.removeProperty('--font-base')
-} catch (_) {}
+} catch {}
 
 // Clean up jcApiBase if it has /api suffix
 try {
@@ -60,7 +60,7 @@ try {
   if (storedApiBase && storedApiBase.endsWith('/api')) {
     localStorage.setItem('jcApiBase', storedApiBase.replace(/\/api$/, ''))
   }
-} catch (_) {}
+} catch {}
 
 // Set defaults
 if (!localStorage.getItem('jcApiBase')) {

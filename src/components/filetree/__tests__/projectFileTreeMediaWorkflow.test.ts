@@ -60,17 +60,9 @@ test('菜单入口只在有选择时出现且在两个菜单分支都可用', ()
   assert.match(tree, /const hasProjectSelection = computed\(\(\) => selectedPaths\.value\.size > 0\)/)
 })
 
-test('同级目录按最后修改时间倒序，且三条加载路径都过同一个排序', () => {
-  const sort = sliceFunction(tree, 'function sortTreeChildren')
-  assert.match(sort, /if \(a\.isDir !== b\.isDir\) return a\.isDir \? -1 : 1/)
-  assert.match(sort, /const timeDiff = \(b\.updatedAt \?\? 0\) - \(a\.updatedAt \?\? 0\)/)
-
-  // 根目录、懒加载展开、刷新三条路径都必须过它；任何一条漏了都会让新建文件夹掉到底部
-  assert.equal((tree.match(/sortTreeChildren\(/g) || []).length, 3)
-  assert.match(
-    sliceFunction(tree, 'function buildTree('),
-    /for \(const node of nodeMap\.values\(\)\) sortTreeChildren\(node\.children\)/,
-  )
+test('懒加载展开与刷新两条路径都过同一个排序（根目录由 buildTree 排序）', () => {
+  // 任何一条漏了都会让新建文件夹掉到底部；排序本身见 projectTree.test.ts
+  assert.equal((tree.match(/sortTreeChildren\(/g) || []).length, 2)
   assert.match(
     sliceFunction(tree, 'async function ensureDirectoryLoaded('),
     /node\.children = sortTreeChildren\(await Promise\.all/,
@@ -97,8 +89,8 @@ test('成功文案走非错误通道，不再把文件树整棵藏起来', () =>
   // errorMsg 会让列表 v-show 隐藏，所以成功提示必须走 statusMsg
   assert.doesNotMatch(tree, /errorMsg\.value = `已把/)
   assert.match(tree, /statusMsg\.value = `已把/)
-  assert.match(tree, /statusMsg\.value = `\$\{folder\.name\}：已为/)
   assert.match(tree, /v-else-if="!loading && statusMsg" class="pft-status pft-success"/)
-  // 部分成功的失败收尾仍然算失败，留在 errorMsg
-  assert.match(tree, /errorMsg\.value = `已编号 \$\{done\}\/\$\{requested\.length\} 个，随后失败/)
+  // 媒体编号的成功与部分失败文案由 useMediaReorder 分别交给这两个通道
+  assert.match(tree, /setError: message => \{ errorMsg\.value = message \}/)
+  assert.match(tree, /setStatus: message => \{ statusMsg\.value = message \}/)
 })

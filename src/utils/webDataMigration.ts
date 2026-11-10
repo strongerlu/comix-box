@@ -157,8 +157,8 @@ function deepEqual(a: unknown, b: unknown): boolean {
 
 function collectCandidateKv(pkg: JcBackupPackage): Record<string, unknown> {
   return {
-    ...(pkg.stores.kv_store || {}),
-    ...(pkg.localStorage || {}),
+    ...pkg.stores.kv_store,
+    ...pkg.localStorage,
   }
 }
 

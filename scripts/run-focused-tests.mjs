@@ -9,6 +9,13 @@ import { build } from 'esbuild'
 const outdir = join(tmpdir(), 'jc-focused-tests')
 
 const wave1FocusedTests = [
+  'src/composables/__tests__/useCreationTaskHistory.test.ts',
+  'src/components/filetree/__tests__/projectTree.test.ts',
+  'src/components/memory/__tests__/chatModelGroups.test.ts',
+  'src/components/memory/__tests__/useComposerMenus.test.ts',
+  'src/components/filetree/__tests__/resourceClipboard.test.ts',
+  'src/components/filetree/__tests__/useMediaReorder.test.ts',
+  'src/utils/__tests__/creationModelGroups.test.ts',
   'src/stores/__tests__/mcpStore.test.ts',
   'src/runtime/creation/__tests__/localComfyVideo.test.ts',
   'src/composables/__tests__/useReviewPromptEditor.test.ts',

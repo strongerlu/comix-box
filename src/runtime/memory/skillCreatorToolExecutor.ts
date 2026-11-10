@@ -501,8 +501,6 @@ function replaceMarkdownSection(source: string, heading: string, replacement: st
   return [...before, '', ...section, ...(after.length ? ['', ...after] : [])].join('\n').replace(/^\n/, '')
 }
 
-function assertDraftIdentityRemovedForReference() { /* 旧的 draft_id/revision/content_hash 核对已随状态机一起删除 */ }
-
 class SkillDraftError extends Error {
   constructor(readonly code: string, message: string) {
     super(message)

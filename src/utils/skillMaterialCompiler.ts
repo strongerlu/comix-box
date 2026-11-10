@@ -75,7 +75,7 @@ export async function executeCompileSkillMaterialsToolCall(
 ): Promise<string | null> {
   if (call.function.name !== 'compile_skill_materials') return null
   const effectiveContext = {
-    ...(testDeps || {}),
+    ...testDeps,
     ...context,
   }
 

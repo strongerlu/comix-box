@@ -281,7 +281,7 @@ test('project file tree searches unloaded paths in a temporary ancestor-complete
 
   assert.match(source, /const searchTree = ref<TreeNode \| null>\(null\)/)
   assert.match(source, /await projectFiles\.searchPaths\(owner, query, 2000\)/)
-  assert.match(source, /function buildSearchTree/)
+  assert.match(source, /searchTree\.value = buildSearchTree\(/)
 })
 
 test('project file tree adapts the existing UI to IndexedDB on Web', () => {
@@ -471,12 +471,12 @@ test('project tree supports multi-selection and an internal resource clipboard',
   )
 
   assert.match(source, /const selectedPaths = ref<Set<string>>\(new Set\(\)\)/)
-  assert.match(source, /interface ProjectResourceClipboard/)
+  assert.match(source, /from '\.\/resourceClipboard'/)
   assert.match(source, /function selectTreeNode\(node: TreeNode, event\?: MouseEvent\)/)
   assert.match(source, /metaKey \|\| event\.ctrlKey/)
   assert.match(source, /function ctxCopyResources\(\)/)
   assert.match(source, /function ctxCutResources\(\)/)
-  assert.match(source, /function isCutResource\(path: string\)/)
+  assert.match(source, /function isCutResource\(path: string\)[\s\S]{0,80}isCutPath\(resourceClipboard\.value, path\)/)
   assert.match(source, /cutting: isCutResource\(item\.node\.path\)/)
   assert.match(source, /\.pft-node\.cutting \{\s+opacity: 0\.48;\s+\}/)
   assert.match(source, /function ctxPasteResources\(/)

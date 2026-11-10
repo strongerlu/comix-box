@@ -6,12 +6,11 @@ import { test } from 'node:test'
 import { computed, effectScope, nextTick, reactive, ref, watch } from 'vue'
 import { productionRoute } from '@/runtime/memory/productionSkills'
 import { findComposerSuggestion, replaceComposerSuggestion } from '../composerSuggestions'
+import { createMentionItems, type MentionScope } from '../composerMentions'
 import { useFilteredList } from '@/composables/useFilteredList'
 import { beginMemoryRun, desktopConversationLiveState, desktopConversationRuns, executeDesktopHarnessRun, memoryRunKey, stopRun, type MemoryRun } from '@/services/desktopConversationRuntime'
 import { shouldReadNativeClipboardImage } from '@/utils/clipboard'
 import { searchSkills } from '@/utils/skillSearch'
-import { skillDisplayLabel } from '@/utils/skillDisplayLabel'
-
 function source(path: string) {
   return readFileSync(join(process.cwd(), path), 'utf8')
 }
@@ -23,51 +22,6 @@ function composerFunction(name: string, dependencies: Record<string, unknown>) {
   const code = transformSync(body, { loader: 'ts', target: 'es2022' }).code
   return new Function(...Object.keys(dependencies), `${code}; return ${name}`)(...Object.values(dependencies))
 }
-
-test('composer menu anchors stay inside the viewport near the right and top edges', () => {
-  const viewport = { innerWidth: 1280, innerHeight: 800 }
-  const trigger = { getBoundingClientRect: () => ({ left: 1240, top: 760 }) }
-  const position = composerFunction('composerMenuPosition', { window: viewport, composerMenuTrigger: null })
-  assert.deepEqual(position({ currentTarget: trigger }), { left: 948, bottom: 48 })
-  viewport.innerWidth = 220
-  trigger.getBoundingClientRect = () => ({ left: 210, top: 810 })
-  assert.deepEqual(position({ currentTarget: trigger }), { left: 12, bottom: 12 })
-})
-
-test('permission tooltip stays above the bottom composer instead of outside the window', () => {
-  const chipTip = ref<{ top: number } | null>(null)
-  const show = composerFunction('showChipTip', { chipTip })
-  const rect = { left: 1200, top: 760, bottom: 792, width: 32 }
-  show({ currentTarget: { getBoundingClientRect: () => rect } }, '权限：工作区内修改')
-  assert.ok(chipTip.value && chipTip.value.top < rect.top)
-})
-
-test('composer menu keyboard navigation wraps, supports Home/End and restores focus on Escape', () => {
-  const calls: string[] = []
-  const document = { activeElement: null as unknown }
-  const buttons = [0, 1, 2].map(index => ({ focus() { document.activeElement = buttons[index] } }))
-  const navigate = composerFunction('handleComposerMenuKeydown', {
-    document, closeComposerMenus: (restore = false) => calls.push(restore ? 'close-and-focus' : 'close'),
-  })
-  const key = (value: string) => navigate({ key: value,
-    currentTarget: { querySelectorAll: () => buttons },
-    preventDefault() { calls.push('prevent') }, stopPropagation() { calls.push('stop') },
-  })
-  key('ArrowUp')
-  assert.equal(document.activeElement, buttons[2])
-  key('ArrowDown')
-  assert.equal(document.activeElement, buttons[0])
-  key('End')
-  assert.equal(document.activeElement, buttons[2])
-  key('Home')
-  assert.equal(document.activeElement, buttons[0])
-  calls.length = 0
-  key('Escape')
-  assert.deepEqual(calls, ['prevent', 'stop', 'close-and-focus'])
-  calls.length = 0
-  key('Tab')
-  assert.deepEqual(calls, ['close'])
-})
 
 test('compact Skill menu reuses production actions and keeps the existing manju submenu anchor', () => {
   const calls: string[] = []
@@ -120,18 +74,6 @@ test('Escape dismisses the all Skill picker before closing an open resource prev
   assert.deepEqual(calls, ['skill-picker'])
 })
 
-test('chat model families use the requested order and merge remaining suppliers', () => {
-  const workbench = source('src/components/memory/MemoryWorkbench.vue')
-  const { transformSync } = createRequire(join(process.cwd(), 'package.json'))('esbuild')
-  const functions = workbench.slice(workbench.indexOf('function modelGroupKey('), workbench.indexOf('function isInternalMediaModel('))
-  const block = transformSync(functions + workbench.slice(workbench.indexOf('const modelGroups = computed('), workbench.indexOf('const currentModelLabel =')), { loader: 'ts' }).code
-  const models = ['doubao-chat', 'gemini-pro', 'qwen-plus', 'gpt-6.1-sol', 'claude-opus', 'gpt-5.5', 'deepseek-chat', 'grok-4', 'glm-chat', 'local-chat'].map((id, index) => ({ id, index, providerId: index === 9 ? 'local-ollama' : 'custom:test' }))
-  const groups = new Function('computed', 'textModels', 'LOCAL_OLLAMA_PROVIDER_ID', 'findCustomProvider', `${block}; return modelGroups.value`)(computed, ref(models), 'local-ollama', () => ({}))
-  assert.deepEqual(groups.map((group: { key: string }) => group.key), ['anthropic', 'openai', 'google', 'deepseek', 'qwen', 'xai', 'other', 'local'])
-  assert.deepEqual(groups[1].models.map((model: { index: number }) => model.index), [3, 5])
-  assert.deepEqual(groups[6].models.map((model: { index: number }) => model.index), [0, 8])
-})
-
 test('preview and creation docks share the topbar shrink rules', () => {
   const workbench = source('src/components/memory/MemoryWorkbench.vue')
   assert.match(workbench, /\.memory-workbench:is\(\.preview-open, \.creation-open\) \.memory-title-drag \{ min-width: 0; \}/)
@@ -140,39 +82,56 @@ test('preview and creation docks share the topbar shrink rules', () => {
   assert.match(workbench, /\.memory-topbar-actions \{ display: flex; flex: 0 0 auto;/)
 })
 
-// Execute the actual SFC candidate loader without mounting the entire workbench.
 function mentionLoaderFixture(blockCatalog = false, bundled: unknown[] = [], custom = [{ name: 'story', description: '故事', enabled: true }]) {
-  const { transformSync } = createRequire(join(process.cwd(), 'package.json'))('esbuild')
-  const body = source('src/components/memory/MemoryWorkbench.vue').match(/const mentionItems = async[\s\S]*?(?=\nconst mentionKey)/)?.[0]
-  assert.ok(body)
   const calls = { catalog: 0, customSkills: 0, search: 0, list: 0 }
   const mentionOpen = ref(true)
-  const mentionScope = ref('all')
-  const mentionTrigger = ref('@')
+  const mentionScope = ref<MentionScope>('all')
   const conversations = ref<any[]>([])
   const conversation = ref<any>(null)
+  const novelSelected = ref(false)
   let finishCatalog!: (entries: unknown[]) => void
   const catalog = blockCatalog ? new Promise<unknown[]>(resolve => { finishCatalog = resolve }) : Promise.resolve(bundled)
-  const dependencies = {
-    skillDisplayLabel, mentionOpen, mentionScope, mentionTrigger, desktopOnlyRuntime: true, conversations, conversation,
-    mcpStore: { allMcpTools: [{ serverId: 'github' }, { serverId: 'github' }, { serverId: 'local' }] },
-    loadWebSkillCatalog: () => { calls.catalog++; return catalog },
-    agentStore: { getCustomSkills: () => { calls.customSkills++; return custom } },
-    sortSkillsForPicker: (entries: unknown[]) => entries,
-    manjuSelected: ref(false), MANJU_SKILLS: ['story'], WIKI_MEMORY_SKILL: 'wiki-memory',
-    novelSelected: ref(false), NOVEL_SKILLS: ['jc-novel', 'wiki-memory'],
-    shortDramaSelected: ref(false), SHORT_DRAMA_SKILLS: ['jc-duanju', 'wiki-memory'], projectOwner: ref('/project'),
-    files: {
-      searchPaths: async () => { calls.search++; return [{ path: 'story.md', kind: 'text', isDirectory: false }] },
-      list: async () => { calls.list++; return [{ path: 'story.md', kind: 'text', isDirectory: false }] },
-    },
-    isOfficeResource: () => false,
-  }
   type Item = { type: string; id?: string; name?: string; display: string; description: string; source?: string; unavailableReason?: string }
-  const code = transformSync(body, { loader: 'ts', target: 'es2022' }).code
-  const load = new Function(...Object.keys(dependencies), `${code}; return mentionItems`)(...Object.values(dependencies)) as (query: string) => Promise<Item[]>
-  return { load, calls, mentionOpen, mentionScope, conversations, conversation, novelSelected: dependencies.novelSelected, finishCatalog: () => finishCatalog([]) }
+  const load = createMentionItems({
+    open: mentionOpen, scope: mentionScope, trigger: ref('@'), desktop: true,
+    owner: () => '/project',
+    conversations: () => conversations.value,
+    currentConversationId: () => conversation.value?.transcript.id,
+    mcpTools: () => [{ serverId: 'github' }, { serverId: 'github' }, { serverId: 'local' }],
+    loadBundledSkills: () => { calls.catalog++; return catalog as never },
+    customSkills: () => { calls.customSkills++; return custom },
+    route: () => ({ manju: false, novel: novelSelected.value, shortDrama: false }),
+    searchPaths: async () => { calls.search++; return [{ path: 'story.md', kind: 'text', isDirectory: false }] as never },
+    isOfficeResource: () => false,
+  }) as unknown as (query: string) => Promise<Item[]>
+  return { load, calls, mentionOpen, mentionScope, conversations, conversation, novelSelected, finishCatalog: () => finishCatalog([]) }
 }
+
+test('@ file candidates skip folders, conversation records and non-office binaries', async () => {
+  const searched: unknown[] = []
+  const load = createMentionItems({
+    open: ref(true), scope: ref<MentionScope>('all'), trigger: ref('@'), desktop: false,
+    owner: () => '/project', conversations: () => [], currentConversationId: () => undefined, mcpTools: () => [],
+    loadBundledSkills: async () => [], customSkills: () => [],
+    route: () => ({ manju: false, novel: false, shortDrama: false }),
+    searchPaths: async (...args) => {
+      searched.push(args)
+      return [
+        { path: 'docs', isDirectory: true, kind: 'text' },
+        { path: '.raw/对话记录/a.md', isDirectory: false, kind: 'text' },
+        { path: 'a.zip', isDirectory: false, kind: 'binary' },
+        { path: 'b.pdf', isDirectory: false, kind: 'binary' },
+        { path: 'c.png', isDirectory: false, kind: 'media' },
+      ] as never
+    },
+    isOfficeResource: resource => resource.path.endsWith('.pdf'),
+  })
+  const items = await load(' notes ')
+  const files = items.filter(item => item.type === 'file')
+  assert.deepEqual(items.filter(item => item.type === 'tool').map(item => item.type === 'tool' && item.id), ['skill', 'media', 'av', 'mcp'])
+  assert.deepEqual(searched, [['/project', 'notes', 40]])
+  assert.deepEqual(files.map(item => [item.display, item.description]), [['b.pdf', '项目文件'], ['c.png', '项目媒体']])
+})
 
 test('all Skill candidates retain entries beyond 40, source metadata and existing deduplication', async () => {
   const bundled = Array.from({ length: 65 }, (_, index) => ({ name: `skill-${index}`, displayName: `Skill ${index}`, description: '内置' }))
@@ -908,7 +867,6 @@ test('conversation lifecycle restores the latest Skill selection and clears it f
 test('novel mode retains its writer and an independently selected native Wiki entry', () => {
   const workbench = source('src/components/memory/MemoryWorkbench.vue')
   assert.match(workbench, /selectedSkillNames\.value = \[NOVEL_MODE, \.\.\.selectedSkillNames\.value\.filter/)
-  assert.match(workbench, /NOVEL_SKILLS\.includes\(skill\.name\)/)
 })
 
 test('memory file tree and model tools share the hidden and protected project contract', () => {
@@ -1087,12 +1045,15 @@ test('memory workbench saves Office attachments as durable project materials', (
   assert.doesNotMatch(runtime, /只写了尚未执行的脚本不算完成/)
 })
 
-test('点 @Skill 只列 Skill，不重复芯片排已有的工具入口', () => {
+test('点 @Skill 只列 Skill，不重复芯片排已有的工具入口', async () => {
   const workbench = source('src/components/memory/MemoryWorkbench.vue')
   assert.match(workbench, /mentionScope\.value = 'skill'/)
-  assert.match(workbench, /if \(scope === 'skill'\) return skills/)
-  assert.match(workbench, /sortSkillsForPicker\(/)
   assert.match(workbench, /recordSkillUse\(option\.name\)/)
+  const fixture = mentionLoaderFixture(false, [{ name: 'design', description: '设计' }])
+  fixture.mentionScope.value = 'skill'
+  const items = await fixture.load('')
+  assert.ok(items.length > 0)
+  assert.ok(items.every(item => item.type === 'skill'))
 })
 
 test('新手指南跟输入框的 @ 入口保持同步', () => {
@@ -1240,14 +1201,13 @@ test('memory mode keeps explicit Skill and plugin connections', () => {
 
   assert.doesNotMatch(workbench, /SkillPickerBar/)
   assert.match(workbench, /agentStore\.getCustomSkills\(\)/)
-  assert.match(workbench, /files\.searchPaths\(owner, query\.trim\(\), 40\)/)
   assert.match(workbench, /const selectedSkillNames = ref<string\[\]>\(\[\]\)/)
   assert.match(workbench, /getCursorPosition\(editor\)/)
   assert.match(workbench, /findComposerSuggestion\(input\.value, getCursorPosition\(composerRef\.value\)\)/)
   assert.match(workbench, /replaceComposerSuggestion\(input\.value, suggestion, ''\)/)
   assert.match(workbench, /v-show="mentionOpen"\s+ref="mentionPopoverRef"/)
   assert.match(workbench, /addProjectFileReference\(option\.resource\)/)
-  assert.match(workbench, /resource\.kind !== 'binary' \|\| isOfficeResource\(resource\)/)
+  assert.match(workbench, /searchPaths: \(owner, query, limit\) => files\.searchPaths\(owner, query, limit\),\s*isOfficeResource,/)
   assert.match(workbench, /selectedSkillNames: skillSnapshot/)
   assert.doesNotMatch(workbench, /wikiSelected|@Wiki/)
   assert.match(runtime, /selectMemoryTools\(\n\s*allMemoryToolDefinitions/)
@@ -1262,7 +1222,7 @@ test('memory mode keeps explicit Skill and plugin connections', () => {
   assert.match(runtime, /buildMemoryWebProjectToolDefinitions\(\)/)
   assert.match(runtime, /projectId\?: string/)
   assert.match(runtime, /toolLoopRequired && !input\.projectId/)
-  assert.match(workbench, /desktopOnlyRuntime \? \[/)
+  assert.match(workbench, /desktop: desktopOnlyRuntime,/)
 })
 
 test('memory composer does not expose removed Jina web tools', () => {
@@ -1287,13 +1247,11 @@ test('memory topbar uses a grouped model popover and an adaptive new conversatio
   )
   assert.match(workbench, /<JcIcon name="add" class="memory-new-conversation-icon" \/>/)
   assert.doesNotMatch(workbench, /<select v-model="agentStore\.currentModel"/)
-  assert.match(workbench, /const modelGroups = computed/)
-  assert.match(workbench, /anthropic: 'Claude', openai: 'GPT', google: 'Gemini'/)
+  assert.match(workbench, /const modelGroups = computed\(\(\) => groupChatModels\(textModels\.value\)\)/)
   assert.match(
     workbench,
     /agentStore\.textModels\.filter\(model => !isInternalMediaModel\(model\.id\)\)/,
   )
-  assert.match(workbench, /id === 'jina-search' \|\| id === 'jina-reader'/)
   assert.doesNotMatch(workbench, /runninghub: 'RunningHub'/)
   assert.match(workbench, /class="memory-model-menu" role="listbox"/)
   assert.match(workbench, /\.memory-model-menu \{[\s\S]*left: 0;/)
@@ -2323,15 +2281,23 @@ test('memory settings expose the existing Desktop local model runtime', () => {
   assert.doesNotMatch(runtime, /forceCloud: true/)
 })
 
-test('aggregate MCP mentions remain searchable by their internal tool prefix', () => {
+test('aggregate MCP mentions remain searchable by their internal tool prefix', async () => {
   const workbench = source('src/components/memory/MemoryWorkbench.vue')
 
   assert.match(workbench, /selectedMcpToolNames\.value\.map\(id => \{[\s\S]*mcpStore\.servers\.find\(server => server\.id === serverId\)\?\.name \|\| serverId/)
   assert.match(workbench, /if \(id\.startsWith\('mcp__'\)\) \{[\s\S]*selectedMcpToolNames\.value = selectedMcpToolNames\.value\.filter\(item => item !== id\)/)
   assert.match(workbench, /filterKeys: \['id', 'display', 'description'\]/)
   assert.match(workbench, /mentionScope\.value = 'mcp'/)
-  assert.match(workbench, /if \(scope === 'mcp' \|\| query\.trim\(\)\.startsWith\('mcp__'\)\) return mcpTools/)
-  assert.doesNotMatch(workbench, /if \(query\.trim\(\)\.startsWith\('mcp__'\)\) return \[\.\.\.skills/)
+  const fixture = mentionLoaderFixture()
+  const expected = [
+    { id: 'mcp__github', display: 'MCP · github', description: '整体工具（2 个 operation）' },
+    { id: 'mcp__local', display: 'MCP · local', description: '整体工具（1 个 operation）' },
+  ]
+  const brief = (items: Awaited<ReturnType<typeof fixture.load>>) => items.map(({ id, display, description }) => ({ id, display, description }))
+  assert.deepEqual(brief(await fixture.load('mcp__')), expected)
+  fixture.mentionScope.value = 'mcp'
+  assert.deepEqual(brief(await fixture.load('')), expected)
+  assert.equal(fixture.calls.catalog, 0)
 })
 
 test('capability chips survive a completed round and come back with the conversation', () => {

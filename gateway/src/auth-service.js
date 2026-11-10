@@ -1,5 +1,5 @@
 import { badRequest, unauthorized, upstreamError } from './errors.js';
-import { NEWAPI_ADMIN_TOKEN_ENV_NAMES, readFirstEnv, trimBaseUrl } from './env.js';
+import { readFirstEnv, trimBaseUrl } from './env.js';
 
 export const SESSION_COOKIE_NAME = 'jc_session';
 

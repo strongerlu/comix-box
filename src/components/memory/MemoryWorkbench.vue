@@ -26,7 +26,9 @@ import { consumeLastEvent, emitEvent, onEvent } from '@/utils/eventBus'
 import ManjuAutoPanel from './ManjuAutoPanel.vue'
 import { AUTO_INTAKE_PREFIX, useManjuAuto } from '@/composables/useManjuAuto'
 import { setDesktopManjuAuto } from '@/services/desktopRemoteManju'
-import { findCustomProvider, LOCAL_OLLAMA_PROVIDER_ID } from '@/utils/providerConfig'
+import { groupChatModels, isInternalMediaModel } from './chatModelGroups'
+import { useComposerMenus } from './useComposerMenus'
+import { createMentionItems, mentionKey, type MemoryMentionOption } from './composerMentions'
 import { appendProjectDirectoryIndex, createRuntimeProjectFileService } from '@/services/projectFileService'
 import { createProjectFileActions, mediaMimeForPath } from '@/services/projectFileActions'
 import { acquireProjectMediaDisplay, type MediaDisplayLease } from '@/services/projectMediaResolver'
@@ -156,7 +158,7 @@ import { memoryMediaDirectoryFor } from '@/utils/memoryProjectPaths'
 import { parseScene3DResultMarkers, serializeScene3DDocument, stripScene3DResultMarkers, type Scene3DDocument } from '@/runtime/memory/scene3d'
 import { serializeJsonCanvas, type JsonCanvasDocument } from '@/runtime/memory/jsonCanvas'
 import { loadWebSkillCatalog } from '@/utils/skillContentResolver'
-import { recordSkillUse, sortSkillsForPicker } from '@/utils/skillPickerOrder'
+import { recordSkillUse } from '@/utils/skillPickerOrder'
 import {
   MANJU_MODE, MANJU_SKILLS, WIKI_MEMORY_SKILL,
   type ManjuPreference,
@@ -447,14 +449,10 @@ function setPermissionTier(tier: DeepSeekPermissionTier) {
     /* 存不下就只保留本次会话内的选择，不影响本轮运行 */
   }
 }
-/**
- * 权限菜单。
- *
- * 使用 fixed 定位，确保菜单不受输入区布局及祖先容器裁剪影响。
- */
-const permissionMenu = ref<{ left: number; bottom: number } | null>(null)
-const composerSkillMenu = ref<{ left: number; bottom: number } | null>(null)
-let composerMenuTrigger: HTMLElement | null = null
+const {
+  permissionMenu, composerSkillMenu, manjuMenu, chipTip,
+  showChipTip, hideChipTip, closeComposerMenus, focusComposerMenu, openComposerMenu, handleComposerMenuKeydown,
+} = useComposerMenus()
 /** 当前档的定义；三档的真相源在 service 层。 */
 const permissionOption = computed(() =>
   DEEPSEEK_PERMISSION_TIERS.find(option => option.tier === permissionTier.value),
@@ -465,57 +463,8 @@ function permissionTierLabel(): string {
   return permissionOption.value?.label || ''
 }
 
-function closeComposerMenus(restoreFocus = false) {
-  permissionMenu.value = null
-  composerSkillMenu.value = null
-  manjuMenu.value = null
-  hideChipTip()
-  if (restoreFocus) composerMenuTrigger?.focus()
-}
-
-function composerMenuPosition(event: MouseEvent | KeyboardEvent) {
-  composerMenuTrigger = event.currentTarget as HTMLElement
-  const rect = composerMenuTrigger.getBoundingClientRect()
-  return {
-    left: Math.max(12, Math.min(rect.left, window.innerWidth - 332)),
-    bottom: Math.max(12, window.innerHeight - rect.top + 8),
-  }
-}
-
-async function focusComposerMenu(id: string) {
-  await nextTick()
-  const menu = document.getElementById(id)
-  const selected = menu?.querySelector<HTMLButtonElement>('button[aria-checked="true"]:not(:disabled)')
-  const target = selected || menu?.querySelector<HTMLButtonElement>('button:not(:disabled)')
-  target?.focus()
-}
-
-function handleComposerMenuKeydown(event: KeyboardEvent) {
-  if (event.key === 'Escape') {
-    event.preventDefault()
-    event.stopPropagation()
-    closeComposerMenus(true)
-    return
-  }
-  if (event.key === 'Tab') { closeComposerMenus(); return }
-  if (!['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(event.key)) return
-  const buttons = Array.from((event.currentTarget as HTMLElement).querySelectorAll<HTMLButtonElement>('button:not(:disabled)'))
-  if (!buttons.length) return
-  event.preventDefault()
-  event.stopPropagation()
-  const current = buttons.indexOf(document.activeElement as HTMLButtonElement)
-  const index = event.key === 'Home' ? 0 : event.key === 'End' ? buttons.length - 1
-    : current < 0 ? (event.key === 'ArrowDown' ? 0 : buttons.length - 1)
-    : (current + (event.key === 'ArrowDown' ? 1 : -1) + buttons.length) % buttons.length
-  buttons[index]?.focus()
-}
-
 function togglePermissionMenu(event: MouseEvent | KeyboardEvent) {
-  const wasOpen = Boolean(permissionMenu.value)
-  closeComposerMenus()
-  if (wasOpen) return
-  permissionMenu.value = composerMenuPosition(event)
-  void focusComposerMenu('memory-permission-options')
+  openComposerMenu(permissionMenu, event, 'memory-permission-options')
 }
 
 /**
@@ -1077,7 +1026,6 @@ const sending = computed(() => activeRun.value?.phase === 'running')
  * 两种全自动都先入稿拆集、确认卡点“开始”才运行；只有到成片会提交生图/视频。三者读写同一套 Wiki 进度，可随时切换接续。
  */
 const manjuMode = ref<'free' | 'prompts' | 'film'>('free')
-const manjuMenu = ref<{ left: number; bottom: number } | null>(null)
 let pendingAutoIntake = false
 function waitUntilIdle() {
   return new Promise<void>(resolve => {
@@ -1108,11 +1056,7 @@ watch(sending, busy => {
 watch(manjuSelected, on => { if (!on) manjuMode.value = 'free' })
 
 function toggleManjuMenu(event: MouseEvent | KeyboardEvent) {
-  const wasOpen = Boolean(manjuMenu.value)
-  closeComposerMenus()
-  if (wasOpen) return
-  manjuMenu.value = composerMenuPosition(event)
-  void focusComposerMenu('memory-manju-options')
+  openComposerMenu(manjuMenu, event, 'memory-manju-options')
 }
 
 function chooseManjuMode(mode: 'free' | 'prompts' | 'film' | 'off') {
@@ -1146,11 +1090,7 @@ const composerSkillLabel = computed(() => manjuSelected.value ? manjuModeLabels[
     : visibleSkillNames.value.length ? `已选 ${visibleSkillNames.value.length} 个 Skill` : '创作 Skill')
 
 function toggleComposerSkillMenu(event: MouseEvent | KeyboardEvent) {
-  const wasOpen = Boolean(composerSkillMenu.value)
-  closeComposerMenus()
-  if (wasOpen) return
-  composerSkillMenu.value = composerMenuPosition(event)
-  void focusComposerMenu('memory-composer-skill-options')
+  openComposerMenu(composerSkillMenu, event, 'memory-composer-skill-options')
 }
 
 function chooseComposerSkill(kind: 'manju' | 'short-drama' | 'novel' | 'other') {
@@ -1284,124 +1224,21 @@ watch(desktopRemoteCompleted, async completed => {
   if (opened.value?.type === 'conversation') opened.value = { ...opened.value, transcript: updated.transcript }
 })
 
-type MemoryMentionOption =
-  | { type: 'tool'; id: string; display: string; description: string; icon: string }
-  | { type: 'command'; id: string; display: string; description: string; icon: string }
-  | { type: 'file'; display: string; description: string; resource: ProjectResource }
-  | ComposerSkillOption
-  | { type: 'session'; id: string; display: string; description: string; conversationId: string }
-
-const mentionItems = async (query: string): Promise<MemoryMentionOption[]> => {
-  if (!mentionOpen.value) return []
-  const scope = mentionScope.value
-  const mcpByServer = new Map<string, number>()
-  for (const tool of mcpStore.allMcpTools || []) {
-    mcpByServer.set(tool.serverId, (mcpByServer.get(tool.serverId) || 0) + 1)
-  }
-  const mcpTools: MemoryMentionOption[] = [...mcpByServer.entries()].map(([serverId, count]) => ({
-    type: 'tool', id: `mcp__${serverId}`, display: `MCP · ${serverId}`,
-    description: `整体工具（${count} 个 operation）`, icon: 'extension',
-  }))
-  if (scope === 'mcp' || query.trim().startsWith('mcp__')) return mcpTools
-  const owner = projectOwner.value
-  const sessionOptions = (): MemoryMentionOption[] => conversations.value
-    .filter(item => item.resource.owner === owner && item.transcript.id !== conversation.value?.transcript.id)
-    .map(item => ({
-      type: 'session', id: item.transcript.id, conversationId: item.transcript.id,
-      display: item.transcript.title, description: '引用该对话最近 12 条用户/助手消息',
-    }))
-  if (scope === 'session') return desktopOnlyRuntime ? sessionOptions() : []
-  // 与芯片排保持一致：本机文件与终端由底部「权限」档直接控制（旧称 @文件），
-  // 不再单列；3D 是桌面独有。
-  const toolOptions: MemoryMentionOption[] = [
-    ...(desktopOnlyRuntime ? [{ type: 'tool' as const, id: 'wiki', display: 'Wiki Memory', description: '查询、整理项目资料与归档创作成果', icon: 'description' }] : []),
-    { type: 'tool', id: 'skill', display: 'Skill', description: '加载指定 Skill', icon: 'psychology' },
-    ...(desktopOnlyRuntime
-      ? [{ type: 'tool' as const, id: 'scene3d', display: '3D', description: '创建或编辑 3D 场景', icon: 'view-in-ar' }]
-      : []),
-    { type: 'tool', id: 'media', display: 'Office', description: '导出文档、表格、幻灯片、PDF、网页和长图', icon: 'image' },
-    { type: 'tool', id: 'av', display: '影音', description: '生成图片、视频和音频', icon: 'movie' },
-    { type: 'tool', id: 'mcp', display: 'MCP', description: '调用已连接的 MCP 工具', icon: 'extension' },
-  ]
-  const sessionTool: MemoryMentionOption = {
-    type: 'tool', id: 'session', display: '会话', description: '引用当前项目的其他对话', icon: 'chat',
-  }
-  const sessionToolOptions = desktopOnlyRuntime ? [sessionTool] : []
-  if (mentionTrigger.value === '/') {
-    return toolOptions.map(option => option.type === 'tool'
-      ? { type: 'command', id: option.id, display: `/${option.id}`, description: option.description, icon: option.icon }
-      : option)
-  }
-  const normalizedQuery = query.trim().toLocaleLowerCase()
-  if (scope !== 'skill' && normalizedQuery) {
-    const matchingTools = toolOptions.filter(option => option.type === 'tool'
-      && (option.id.toLocaleLowerCase() === normalizedQuery || option.display.toLocaleLowerCase() === normalizedQuery),
-    )
-    if (matchingTools.length) return matchingTools
-  }
-  const bundledSkills = await loadWebSkillCatalog().catch(() => [])
-  if (!mentionOpen.value || mentionScope.value !== scope) return []
-  const skillOptions = [
-    ...bundledSkills.filter(skill => skill.name !== 'wiki-memory').map(skill => ({
-      type: 'skill' as const,
-      display: skillDisplayLabel(skill.name, skill.displayName),
-      description: skill.description || 'COMIC-BOX内置 Skill',
-      name: skill.name,
-      source: 'builtin' as const,
-    })),
-    ...agentStore.getCustomSkills()
-      .filter(skill => skill.enabled !== false)
-      .map(skill => ({
-        type: 'skill' as const,
-        display: skill.name,
-        description: skill.description,
-        name: skill.name,
-        source: 'custom' as const,
-      })),
-  ]
-  const seenSkillNames = new Set<string>()
-  const skills = sortSkillsForPicker(skillOptions.filter(skill => {
-    if (seenSkillNames.has(skill.name)) return false
-    seenSkillNames.add(skill.name)
-    return true
-  }).map(skill => ({
-    ...skill,
-    unavailableReason: manjuSelected.value && !MANJU_SKILLS.includes(skill.name) && skill.name !== WIKI_MEMORY_SKILL
-      ? '请先退出漫剧制作，再选择此 Skill'
-      : novelSelected.value && !NOVEL_SKILLS.includes(skill.name) ? '请先退出小说创作，再选择此 Skill'
-        : shortDramaSelected.value && !SHORT_DRAMA_SKILLS.includes(skill.name) ? '请先退出短剧改编，再选择此 Skill' : undefined,
-  })))
-  // 从芯片排的「@Skill」进来时只列 Skill：下面的芯片排已经有全部工具入口了。
-  if (scope === 'skill') return skills
-  const availableSkills = skills.filter(skill => !skill.unavailableReason)
-  // Empty @ shows tools and recent skills without recursively enumerating up to 1,000 project files.
-  const resources = !owner || !normalizedQuery
-    ? []
-    : await files.searchPaths(owner, query.trim(), 40)
-  const projectOptions = resources
-    .filter(resource => !resource.isDirectory
-      && !resource.path.startsWith('.raw/对话记录/')
-      && (resource.kind !== 'binary' || isOfficeResource(resource)))
-    .slice(0, 40)
-    .map(resource => ({
-      type: 'file' as const,
-      display: resource.path,
-      description: resource.kind === 'media' ? '项目媒体' : '项目文件',
-      resource,
-    }))
-  return query.trim()
-    ? [...toolOptions, ...sessionToolOptions, ...availableSkills, ...mcpTools, ...projectOptions, ...(desktopOnlyRuntime ? sessionOptions() : [])]
-    : [...toolOptions, ...sessionToolOptions, ...availableSkills.slice(0, 5), ...mcpTools, ...projectOptions, ...(desktopOnlyRuntime ? sessionOptions().slice(0, 3) : [])]
-}
-const mentionKey = (item: MemoryMentionOption) => item.type === 'tool'
-  ? `tool:${item.id}`
-  : item.type === 'command'
-    ? `command:${item.id}`
-  : item.type === 'skill'
-  ? `skill:${item.name}`
-  : item.type === 'file'
-    ? `file:${item.resource.path}`
-    : `session:${item.conversationId}`
+const mentionItems = createMentionItems({
+  open: mentionOpen,
+  scope: mentionScope,
+  trigger: mentionTrigger,
+  desktop: desktopOnlyRuntime,
+  owner: () => projectOwner.value,
+  conversations: () => conversations.value,
+  currentConversationId: () => conversation.value?.transcript.id,
+  mcpTools: () => mcpStore.allMcpTools,
+  loadBundledSkills: () => loadWebSkillCatalog(),
+  customSkills: () => agentStore.getCustomSkills(),
+  route: () => ({ manju: manjuSelected.value, novel: novelSelected.value, shortDrama: shortDramaSelected.value }),
+  searchPaths: (owner, query, limit) => files.searchPaths(owner, query, limit),
+  isOfficeResource,
+})
 const {
   flat: mentionFlat,
   active: mentionActive,
@@ -1449,20 +1286,7 @@ const filteredFileWriteTargets = computed(() => {
   return query ? fileWriteTargets.value.filter(resource => `${resource.name} ${resource.path}`.toLocaleLowerCase().includes(query)) : fileWriteTargets.value
 })
 const textModels = computed(() => agentStore.textModels.filter(model => !isInternalMediaModel(model.id)))
-const modelGroups = computed(() => {
-  const groups = new Map<string, typeof textModels.value>()
-  for (const model of textModels.value) {
-    const key = modelGroupKey(model)
-    const group = groups.get(key) || []
-    group.push(model)
-    groups.set(key, group)
-  }
-  const remaining = [...groups.entries()]
-  const preferredGroups = ['anthropic', 'openai', 'google', 'deepseek', 'qwen', 'xai', 'other', 'local']
-  const groupRank = (key: string) => preferredGroups.indexOf(key)
-  remaining.sort(([left], [right]) => groupRank(left) - groupRank(right))
-  return remaining.map(([key, models]) => ({ key, label: modelGroupLabel(key), models }))
-})
+const modelGroups = computed(() => groupChatModels(textModels.value))
 const currentModelLabel = computed(() => selectedModel()?.label || agentStore.currentModel || '登录后加载模型')
 // ponytail: 自研内核（Web 未发布工作台）仍用这条 5 条缩略；DH 的过程在轮次内实时渲染，
 // 这里必须为空，否则同一批步骤会在两处各出现一次。
@@ -1877,19 +1701,6 @@ function programStatusSuccessNote(programStatus: MemoryProgramStatus): string {
 }
 const skillCommand = { id: 'skill', label: '@Skill', icon: 'psychology', description: '选择 Skill' }
 
-// fixed 提示不受输入区裁剪；输入工具在窗口底部，文字显示在按钮上方。
-const chipTip = ref<{ text: string; left: number; top: number } | null>(null)
-
-function showChipTip(event: Event, text: string) {
-  const rect = (event.currentTarget as HTMLElement | null)?.getBoundingClientRect()
-  if (!rect) return
-  chipTip.value = { text, left: rect.left + rect.width / 2, top: Math.max(8, rect.top - 36) }
-}
-
-function hideChipTip() {
-  chipTip.value = null
-}
-
 onMounted(async () => {
   setHarnessSceneRecorder(document => recordSceneVideo(document))
   setHarnessSceneHost(sceneHost)
@@ -1988,28 +1799,6 @@ onBeforeUnmount(() => {
   releaseConversationPreviewUrls()
   releaseMediaUrl()
 })
-
-function modelGroupKey(model: { id: string; providerId?: string }): string {
-  if (model.providerId === LOCAL_OLLAMA_PROVIDER_ID) return 'local'
-  const id = model.id.toLowerCase()
-  if (id.includes('claude') || id.includes('anthropic')) return 'anthropic'
-  if (id.includes('gpt') || id.includes('openai')) return 'openai'
-  if (id.includes('gemini') || id.includes('gemma') || id.includes('google')) return 'google'
-  if (id.includes('grok') || id.includes('xai')) return 'xai'
-  if (id.includes('deepseek')) return 'deepseek'
-  if (id.includes('qwen') || id.includes('tongyi')) return 'qwen'
-  if (id.includes('ollama') || id.includes('local-')) return 'local'
-  return 'other'
-}
-
-function modelGroupLabel(key: string): string {
-  return ({ anthropic: 'Claude', openai: 'GPT', google: 'Gemini', deepseek: 'DeepSeek', qwen: '千问', xai: 'Grok', other: '其他', local: '本地模型' } as Record<string, string>)[key] || key
-}
-
-function isInternalMediaModel(modelId: string): boolean {
-  const id = modelId.toLowerCase()
-  return id.startsWith('rh-') || id.includes('/rh-') || id.includes('runninghub') || id === 'jina-search' || id === 'jina-reader'
-}
 
 function closeModelPicker(event: PointerEvent) {
   if (!(event.target as Element | null)?.closest?.('.memory-composer-menu, [data-composer-menu-trigger]')) closeComposerMenus()

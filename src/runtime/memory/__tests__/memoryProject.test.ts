@@ -5,7 +5,6 @@ import { createProjectFileService, type ProjectFileAdapter, type ProjectFileEntr
 import { MEMORY_PROJECT_SKELETON_DIRECTORIES } from '@/utils/memoryProjectPaths'
 import {
   CONVERSATION_DIRECTORY,
-  appendConversationTurn,
   createConversationTranscript,
   parseConversationTranscript,
   type ConversationTurn,

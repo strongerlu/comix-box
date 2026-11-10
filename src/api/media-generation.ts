@@ -1107,7 +1107,7 @@ export async function generateVideo(
     const isDoubaoVideo = isDoubaoVideoModel(model, upstreamModel)
     if (isDoubaoVideo) {
       body.metadata = {
-        ...(body.metadata || {}),
+        ...body.metadata,
       }
       if (aspectRatio) body.metadata.ratio = aspectRatio
       if (resolution) body.metadata.resolution = String(resolution).toLowerCase()

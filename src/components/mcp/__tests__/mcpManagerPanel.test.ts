@@ -68,7 +68,7 @@ test('GitHub OAuth client id is read from the gateway at connect time, not baked
   assert.doesNotMatch(catalogSource, /import\.meta\.env\.VITE_GITHUB_OAUTH_CLIENT_ID/)
   assert.doesNotMatch(catalogSource, /oauthClientId: import\.meta\.env/)
   assert.match(catalogSource, /export async function resolveMcpOAuthClientId/)
-  assert.match(catalogSource, /gatewayJson<\{ client_id\?: string \}>\(\'\/auth\/mcp\/github\/config\'\)/)
+  assert.match(catalogSource, /gatewayJson<\{ client_id\?: string \}>\('\/auth\/mcp\/github\/config'\)/)
   assert.match(source, /await resolveMcpOAuthClientId\(entry\)/)
 })
 

@@ -199,7 +199,7 @@ function mediaInputTransportFor(
   if (apiStyle === 'openai-image-edits' || apiStyle === 'newapi-image-task') {
     return 'multipart'
   }
-  if (apiStyle === 'openai-videos' && /^veo-3\.1-/.test(spec.model)) return 'multipart'
+  if (apiStyle === 'openai-videos' && spec.model.startsWith('veo-3.1-')) return 'multipart'
   if (apiStyle === 'openai-audio-speech') return 'base64'
   if (assetFlow !== 'none' || spec.route === 'runninghub-adapter') return 'url'
   return 'url'

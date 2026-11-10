@@ -138,7 +138,7 @@ export async function productionSearchArguments(agent, argv, workdir) {
   if (reason) throw new Error(reason)
   const excluded = []
   for (const root of state.roots) if (contains(search, root) && search !== root) {
-    const path = relative(search, root).split(sep).join('/').replace(/[\[\]{}*?!\\]/g, '\\$&')
+    const path = relative(search, root).split(sep).join('/').replace(/[[\]{}*?!\\]/g, '\\$&')
     excluded.push(`--glob=!**/${path}`, `--glob=!**/${path}/**`)
   }
   const next = [...argv]

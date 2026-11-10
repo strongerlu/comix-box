@@ -333,7 +333,7 @@ export function failureReason(body, raw) {
     if (text) return String(text)
     try {
       return JSON.stringify(detail).slice(0, 500)
-    } catch (e) {
+    } catch {
       return `comfy-adapter status: ${raw}`
     }
   }

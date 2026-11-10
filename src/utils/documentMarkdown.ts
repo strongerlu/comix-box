@@ -274,7 +274,7 @@ export async function convertDocumentToMarkdown(input: DocumentToMarkdownInput):
     return localResult.errorCode === 'internal'
       ? convertWebDocumentToMarkdown(input, maxChars, outputFilename)
       : localResult
-  } catch (err) {
+  } catch {
     return convertWebDocumentToMarkdown(input, maxChars, outputFilename)
   }
 }

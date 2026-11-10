@@ -22,8 +22,8 @@
  */
 
 import { DatabaseSync } from 'node:sqlite'
-import { readFileSync, writeFileSync, existsSync, mkdirSync, statSync, copyFileSync, renameSync, unlinkSync } from 'node:fs'
-import { resolve, dirname, join } from 'node:path'
+import { readFileSync, writeFileSync, existsSync, mkdirSync, statSync, copyFileSync, unlinkSync } from 'node:fs'
+import { resolve, join } from 'node:path'
 import { homedir } from 'node:os'
 import { createHash } from 'node:crypto'
 
@@ -75,10 +75,6 @@ function mimeToExt(mime) {
     'audio/mpeg': '.mp3', 'audio/wav': '.wav', 'audio/ogg': '.ogg',
   }
   return map[mime] || '.bin'
-}
-
-function bytesToBase64(bytes) {
-  return Buffer.from(bytes).toString('base64')
 }
 
 function base64ToBytes(b64) {

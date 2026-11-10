@@ -83,7 +83,7 @@ export async function persistSkillPackageDraft(
     }
 
     const manifest = {
-      ...(input.manifest || {}),
+      ...input.manifest,
       entry: 'SKILL.md',
       files: assetIndex,
       savedAt: new Date().toISOString(),

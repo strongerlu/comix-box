@@ -1,5 +1,5 @@
 import { corsHeaders, handleOptions } from './cors.js';
-import { GatewayError, badRequest, unauthorized, upstreamError } from './errors.js';
+import { badRequest, unauthorized } from './errors.js';
 import { errorResponse, jsonResponse, notFound, readJson } from './http.js';
 import {
   createDesktopManagedTokenKeyFromBrowserCookie,
@@ -9,9 +9,7 @@ import {
   destroySession,
   expiredSessionCookie,
   ensureLegacyManagedTokenKey,
-  extractManualApiKey,
   getSessionUser,
-  legacyApiBase,
   loginWithWebAccount,
   publicUser,
   sessionCookie
@@ -89,10 +87,6 @@ function escapeHtml(value) {
     .replace(/>/g, '&gt;')
     .replace(/"/g, '&quot;')
     .replace(/'/g, '&#39;');
-}
-
-function compactTimestamp(now = new Date()) {
-  return now.toISOString().replace(/[-:T.Z]/g, '').slice(0, 14);
 }
 
 function buildDesktopDeepLink(redirect, state, apiKey) {

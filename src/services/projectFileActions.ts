@@ -179,7 +179,7 @@ export function createProjectFileActions(projectFiles: ProjectFileService) {
     },
     async createWikiFolder(input: { owner: string; parentPath: string; name: string }): Promise<ProjectResource> {
       const name = input.name.trim()
-      if (!name || name === '.' || name === '..' || /[\\/\0\[\]#|]/.test(name)) throw new Error('Wiki 文件夹名称无效')
+      if (!name || name === '.' || name === '..' || /[\\/\0[\]#|]/.test(name)) throw new Error('Wiki 文件夹名称无效')
       const path = input.parentPath ? `${input.parentPath}/${name}` : name
       const folder = await projectFiles.createFolder(input.owner, path)
       try {

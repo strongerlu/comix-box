@@ -988,7 +988,7 @@ pub fn escape_subtitle_filter_path(path: &Path) -> String {
         .replace(':', "\\:")
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn media_cache_file(
     app: tauri::AppHandle,
     input: MediaCacheFileInput,

@@ -117,7 +117,8 @@ import {
   type CreationFieldValue,
 } from '@/composables/useCreation'
 import CreationTaskThumbnail from './CreationTaskThumbnail.vue'
-import { creationTaskStage, matchesCreationTaskFilter, creationModelDisplayLabel, type CreationTaskFilter } from '@/utils/creationPresentation'
+import { creationTaskStage, creationModelDisplayLabel, groupCreationModels } from '@/utils/creationPresentation'
+import { CREATION_TASK_FILTERS, useCreationTaskHistory } from '@/composables/useCreationTaskHistory'
 import { isUncertainSubmission } from '@/runtime/creation/submissionSafety'
 import { creationModelFamily, displayModelLabel, displayModelPrice, getCreationModelSpec, RH_ONLY_MODE } from '@/runtime/creation/creationModelRegistry'
 import { buildCreationRunPlan } from '@/runtime/creation/creationMediaPlan'
@@ -239,34 +240,8 @@ const creationTasks = computed(() =>
     .filter(t => t.source === 'creation')
     .sort((a, b) => (b.completedAt || b.createdAt) - (a.completedAt || a.createdAt)),
 )
-const taskFilter = ref<CreationTaskFilter>('all')
-const taskSearch = ref('')
-const taskFilters: { key: CreationTaskFilter; label: string }[] = [
-  { key: 'all', label: '全部' }, { key: 'active', label: '进行中' },
-  { key: 'saved', label: '已保存' }, { key: 'attention', label: '待处理' },
-]
-const filteredCreationTasks = computed(() => {
-  const query = taskSearch.value.trim().toLocaleLowerCase()
-  return creationTasks.value.filter(task => matchesCreationTaskFilter(task, taskFilter.value)
-    && (!query || [task.prompt, task.modelLabel, task.model, creationTaskStage(task)].some(value => value?.toLocaleLowerCase().includes(query))))
-})
-const creationTasksTotal = computed(() => filteredCreationTasks.value.length)
-
-const taskPageSize = ref(20)
-const taskPage = ref(1)
-const totalTaskPages = computed(() =>
-  Math.max(1, Math.ceil(creationTasksTotal.value / taskPageSize.value)),
-)
-
-watch([taskFilter, taskSearch, taskPageSize], () => { taskPage.value = 1 })
-watch(creationTasksTotal, () => {
-  if (taskPage.value > totalTaskPages.value) taskPage.value = totalTaskPages.value
-})
-
-const pagedCreationTasks = computed(() => {
-  const start = (taskPage.value - 1) * taskPageSize.value
-  return filteredCreationTasks.value.slice(start, start + taskPageSize.value)
-})
+const taskFilters = CREATION_TASK_FILTERS
+const { taskFilter, taskSearch, taskPageSize, taskPage, totalTaskPages, creationTasksTotal, pagedCreationTasks } = useCreationTaskHistory(creationTasks)
 
 function pad(n: number): string {
   return String(n).padStart(2, '0')
@@ -3706,8 +3681,7 @@ function canvasTool(action: string) {
         target.node.add(marker)
         saveCanvasHistory()
       }
-      const ids = [
-        ...(isText
+      const ids = (isText
           ? [app.on_(PointerEvent.DOWN, onTextDown)]
           : isNumber
             ? [app.on_(PointerEvent.DOWN, onNumberDown)]
@@ -3715,8 +3689,7 @@ function canvasTool(action: string) {
                 app.on_(LeaferDragEvent.START, onStart),
                 app.on_(LeaferDragEvent.DRAG, onDrag),
                 app.on_(LeaferDragEvent.END, onEnd),
-              ]),
-      ]
+              ])
       ;(app as any).__drawCleanups = ids
       break
     }
@@ -4110,36 +4083,7 @@ const modelList = computed(() =>
     }] : []
   }),
 )
-const modelGroups = computed(() => {
-  const groups = new Map<string, typeof modelList.value>()
-  for (const model of modelList.value) groups.set(model.family, [...(groups.get(model.family) || []), model])
-  // 分组顺序：不在表里的组排在最后。
-  // 菠萝 = 图片两项排最前；FK 图片组排在灵动前面；jc 本机整组排最后（用户 2026-10-23 决定）。
-  const order = cpState.task === 'image'
-    ? [
-        'FK-Image', '灵动seedace2.5', '菠萝', '易红 API',
-        'Grok Image', 'GPT Image', 'Banana', 'Z Image', 'FLUX Klein', 'Veo', 'Grok Video',
-        'Seedance 2.0 Mini', 'Seedance 2.0 Fast', 'Seedance 2.5', 'Sora2', 'LTX 2.3', 'Suno', '3D', 'AI 应用', '其他模型',
-        'jc 本机',
-      ]
-    : cpState.task === 'video'
-      ? [
-          // FK Seedance 2.5 置顶；H3 保留独立分组。
-          'FK · Seedance 2.5', '灵动seedace2.5', 'FK · H3', 'FK · Wan 3.0', 'ZX · Seedance', '菠萝',
-          'Seedance 2.5', '易红 API', '源流 AI', 'Veo', 'Grok Video', 'Seedance 2.0 Mini', 'Seedance 2.0 Fast',
-          'GPT Image', 'Banana', 'Z Image', 'FLUX Klein', 'Grok Image', 'Sora2', 'LTX 2.3', 'Suno', '3D', 'AI 应用', '其他模型',
-          'jc 本机',
-        ]
-      : [
-          '菠萝',
-          'GPT Image', 'Banana', 'Z Image', 'FLUX Klein', 'Grok Image', 'Veo', 'Grok Video',
-          'Seedance 2.0 Mini', 'Seedance 2.0 Fast', 'Seedance 2.5', 'Sora2', 'LTX 2.3', 'Suno', '3D', 'AI 应用', '其他模型',
-          'jc 本机',
-        ]
-  // 插件目录新增的分组不在表里，排到已知分组之后。
-  const rank = (family: string) => order.includes(family) ? order.indexOf(family) : order.length
-  return [...groups].sort(([left], [right]) => rank(left) - rank(right))
-})
+const modelGroups = computed(() => groupCreationModels(modelList.value, cpState.task))
 
 function resizePromptInput(el = promptInput.value) {
   if (!el) return

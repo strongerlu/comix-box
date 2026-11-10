@@ -118,6 +118,21 @@ test('Tauri CSP allows approved creation result CDN hosts used for media caching
   assert.match(mediaSrc, /(^|\s)https:(\s|$)/)
 })
 
+test('Tauri CSP only runs bundled scripts, so injected content cannot reach IPC or asset files', () => {
+  const tauriConfig = JSON.parse(readFileSync(join(process.cwd(), 'src-tauri/tauri.conf.json'), 'utf8'))
+  const directives = String(tauriConfig.app?.security?.csp || '').split(';').map(part => part.trim())
+  const scriptSrc = directives.find(part => part.startsWith('script-src ')) || ''
+  const defaultSrc = directives.find(part => part.startsWith('default-src ')) || ''
+  const objectSrc = directives.find(part => part.startsWith('object-src '))
+
+  assert.ok(scriptSrc, 'script-src must be explicit')
+  for (const directive of [scriptSrc, defaultSrc]) {
+    assert.doesNotMatch(directive, /'unsafe-inline'|'unsafe-eval'|'wasm-unsafe-eval'|(^|\s)(https?:|data:|blob:|\*)(\s|$)/, directive)
+    assert.doesNotMatch(directive, /https?:\/\/(?!tauri\.localhost(\s|$))/, directive)
+  }
+  if (objectSrc) assert.doesNotMatch(objectSrc, /(^|\s)(\*|https?:|data:|blob:)(\s|$)/)
+})
+
 test('Tauri asset protocol can serve project media stored below .raw', () => {
   const tauriConfig = JSON.parse(readFileSync(join(process.cwd(), 'src-tauri/tauri.conf.json'), 'utf8'))
   const scope = tauriConfig.app?.security?.assetProtocol?.scope

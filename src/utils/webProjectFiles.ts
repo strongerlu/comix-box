@@ -400,7 +400,7 @@ export function createWebProjectFiles(
     const previousOpfsFileId = replacesBinary ? opfsFileId(existing!) : ''
     const parentId = existing?.folderId || await ensureParents(projectId, normalized)
     const now = Date.now()
-    const metadata = { ...(existing?.metadata || {}) }
+    const metadata = { ...existing?.metadata }
     if (replacesBinary) {
       delete metadata.binaryStorage
       delete metadata.opfsFileId
@@ -500,8 +500,8 @@ export function createWebProjectFiles(
           createdAt: existing?.createdAt || now,
           updatedAt: now,
           metadata: {
-            ...(existing?.metadata || {}),
-            ...(options.metadata || {}),
+            ...existing?.metadata,
+            ...options.metadata,
             kind: 'project-file',
             projectId,
             relativePath: normalized,
@@ -600,7 +600,7 @@ export function createWebProjectFiles(
           name: item.id === entry.id ? cleanName : item.name,
           folderId: item.id === entry.id ? nextParentId : item.folderId,
           updatedAt: Date.now(),
-          metadata: { ...(item.metadata || {}), relativePath },
+          metadata: { ...item.metadata, relativePath },
         })
       }
       onChange(projectId)
@@ -687,7 +687,7 @@ export function createWebProjectFiles(
             const parentId = await ensureParents(projectId, destination)
             const next: FileEntry = {
               ...source, name: destination.split('/').pop()!, folderId: parentId, updatedAt: Date.now(),
-              metadata: { ...(source.metadata || {}), projectId, relativePath: destination },
+              metadata: { ...source.metadata, projectId, relativePath: destination },
             }
             await adapter.put(next)
             reservedPaths.add(destination)
@@ -722,13 +722,13 @@ export function createWebProjectFiles(
           if (isFolder(source)) {
             const next: FileEntry = {
               ...source, id: makePathId('webdir', projectId, destination), name: destination.split('/').pop()!, folderId: parentId,
-              createdAt: now, updatedAt: now, metadata: { ...(source.metadata || {}), projectId, relativePath: destination, isFolder: true },
+              createdAt: now, updatedAt: now, metadata: { ...source.metadata, projectId, relativePath: destination, isFolder: true },
             }
             await adapter.put(next)
             created.push(next)
             continue
           }
-          const metadata = { ...(source.metadata || {}), projectId, relativePath: destination }
+          const metadata = { ...source.metadata, projectId, relativePath: destination }
           if (isOpfsBinary(source)) {
             const nextOpfsFileId = makeId('webbin')
             const blob = await binary.read(opfsFileId(source))
@@ -769,7 +769,7 @@ export function createWebProjectFiles(
         category,
         mimeType,
         size: 0,
-        metadata: { ...(file.metadata || {}), ...metadata, sourceUrl: url },
+        metadata: { ...file.metadata, ...metadata, sourceUrl: url },
       }
       await adapter.put(updated)
       onChange(projectId)

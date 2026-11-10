@@ -31,35 +31,18 @@ test('媒体排序编号只出现在目录右键菜单里', () => {
   assert.doesNotMatch(fileMenu, /ctxReorderMedia/)
 })
 
-test('打开预演不修改任何文件，改名只发生在确认之后', () => {
+test('右键入口先关菜单再打开预演，预演与改名逻辑在 useMediaReorder 中', () => {
   const open = sliceFunction('async function ctxReorderMedia()')
-  assert.match(open, /planMediaReorder\(|buildMediaReorderPlan\(/)
+  assert.match(open, /closeCtxMenu\(\)[\s\S]*await openMediaReorder\(node\)/)
   assert.doesNotMatch(open, /projectFiles\.rename\(/)
-
-  const confirm = sliceFunction('async function confirmMediaReorder()')
-  assert.match(confirm, /projectFiles\.rename\(/)
-  assert.match(confirm, /temporaryReorderName\(/)
-  assert.doesNotMatch(confirm, /keep-both/)
+  assert.match(source, /import \{ useMediaReorder \} from '\.\/useMediaReorder'/)
 })
 
-test('编号计划由纯函数产出，并复用现有重命名合同', () => {
-  assert.match(source, /import \{[^}]*planMediaReorder[^}]*\} from '@\/utils\/mediaReorder'/)
-  assert.match(source, /mediaKindOf\(/)
+test('编号复用现有重命名合同、保护规则与生成记录时间', () => {
+  assert.match(source, /rename: \(resource, name\) => projectFiles\.rename\(resource, name\)/)
   assert.match(source, /isProtected: isProtectedMemoryPath/)
-  assert.match(source, /getTask|mediaTaskStore\.tasks/)
-})
-
-test('编号基础名取当前文件夹名，而不是文件原名', () => {
-  const build = sliceFunction('function buildMediaReorderPlan()')
-  assert.match(build, /baseName: mediaReorderFolder\.value\?\.name/)
-
-  const open = sliceFunction('async function ctxReorderMedia()')
-  const folderReady = open.indexOf('mediaReorderFolder.value = {')
-  assert.notEqual(folderReady, -1)
-  assert.ok(
-    folderReady < open.indexOf('buildMediaReorderPlan()'),
-    '文件夹名必须在算计划之前就位',
-  )
+  assert.match(source, /createdAtOf: mediaCreatedAtOf/)
+  assert.match(sliceFunction('function mediaCreatedAtOf('), /mediaTaskStore\.tasks/)
 })
 
 test('预演弹窗沿用现有弹窗的可访问性范式', () => {

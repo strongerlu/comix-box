@@ -23,7 +23,7 @@ pub fn greet(name: &str) -> String {
     format!("你好，{}！COMIC-BOX桌面版已就绪。", name)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn save_generated_file(
     input: SaveGeneratedFileInput,
 ) -> Result<SaveGeneratedFileOutput, String> {

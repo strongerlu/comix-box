@@ -168,7 +168,7 @@ fn normalized_for_compare(path: &Path) -> PathBuf {
 }
 
 /// 项目外复制文件或目录（用户已给出两端路径）。目标已存在时拒绝，避免静默覆盖。
-#[tauri::command]
+#[tauri::command(async)]
 pub fn dev_copy_external(input: DevExternalMoveInput) -> Result<String, String> {
     let source = canonical_external_existing_path(&input.source)?;
     let destination = PathBuf::from(input.destination.trim());
@@ -954,7 +954,7 @@ pub fn package_json_scripts(root: &Path) -> Vec<String> {
         .unwrap_or_default()
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn dev_detect_project(input: DevDetectProjectInput) -> Result<DevProjectDetection, String> {
     let root = canonical_root(&input.root)?;
     let mut project_types = Vec::new();
@@ -1017,7 +1017,7 @@ pub fn dev_detect_project(input: DevDetectProjectInput) -> Result<DevProjectDete
     })
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn dev_list_files(input: DevListFilesInput) -> Result<Vec<DevFileEntry>, String> {
     let root = canonical_root(&input.root)?;
     let start = resolve_existing_path(&root, input.relative_path.as_deref().unwrap_or("."))?;
@@ -1071,7 +1071,7 @@ pub fn dev_list_files(input: DevListFilesInput) -> Result<Vec<DevFileEntry>, Str
     Ok(entries)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn dev_list_directory(input: DevListFilesInput) -> Result<Vec<DevFileEntry>, String> {
     let root = canonical_root(&input.root)?;
     let start = resolve_existing_path(&root, input.relative_path.as_deref().unwrap_or("."))?;
@@ -1104,7 +1104,7 @@ pub fn dev_list_directory(input: DevListFilesInput) -> Result<Vec<DevFileEntry>,
         .collect()
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn dev_search_project_paths(
     input: DevSearchProjectPathsInput,
 ) -> Result<Vec<DevFileEntry>, String> {
@@ -1201,7 +1201,7 @@ pub fn dev_stop_project_watch(root: String) -> Result<(), String> {
     Ok(())
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn dev_list_file_descendants(input: DevListFilesInput) -> Result<Vec<DevFileEntry>, String> {
     let root = canonical_root(&input.root)?;
     let relative_path = input
@@ -1249,7 +1249,7 @@ pub fn dev_list_file_descendants(input: DevListFilesInput) -> Result<Vec<DevFile
     Ok(entries)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn dev_list_external_files(
     input: DevExternalListFilesInput,
 ) -> Result<Vec<DevFileEntry>, String> {
@@ -1367,7 +1367,7 @@ pub fn is_probably_text_file(path: &Path) -> bool {
     )
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn dev_search_text(input: DevSearchTextInput) -> Result<Vec<DevTextMatch>, String> {
     let root = canonical_root(&input.root)?;
     let start = resolve_existing_path(&root, input.relative_path.as_deref().unwrap_or("."))?;
@@ -1443,7 +1443,7 @@ pub fn dev_file_exists(input: DevFileExistsInput) -> Result<bool, String> {
     Ok(path.is_file())
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn dev_read_file(input: DevReadFileInput) -> Result<DevReadFileOutput, String> {
     let root = canonical_root(&input.root)?;
     let path = resolve_existing_path(&root, &input.relative_path)?;
@@ -1505,7 +1505,7 @@ fn read_file_range(
     })
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn dev_hash_project_file(input: DevReadFileInput) -> Result<String, String> {
     let root = canonical_root(&input.root)?;
     let path = resolve_existing_path(&root, &input.relative_path)?;
@@ -1515,7 +1515,7 @@ pub fn dev_hash_project_file(input: DevReadFileInput) -> Result<String, String> 
     sha256_file(&path)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn dev_read_external_file(
     input: DevExternalReadFileInput,
 ) -> Result<DevReadFileOutput, String> {
@@ -1556,7 +1556,7 @@ pub fn dev_save_project_file_as(input: DevSaveProjectFileAsInput) -> Result<(), 
     Ok(())
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn dev_read_many_files(input: DevReadManyFilesInput) -> Result<Vec<DevReadFileOutput>, String> {
     let root = canonical_root(&input.root)?;
     let max_bytes = input.max_bytes_per_file.unwrap_or(80_000).clamp(1, 500_000);
@@ -1719,7 +1719,7 @@ pub fn dev_write_external_file(
     })
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn dev_write_file_bytes(input: DevWriteFileBytesInput) -> Result<DevWriteFileOutput, String> {
     let root = canonical_root(&input.root)?;
     let path = resolve_write_path(&root, &input.relative_path)?;
@@ -2194,7 +2194,7 @@ pub fn dev_replace_in_external_file(
     })
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn dev_get_diff(input: DevGetDiffInput) -> Result<DevGetDiffOutput, String> {
     let root = canonical_root(&input.root)?;
     let max_bytes = input.max_bytes.unwrap_or(200_000).clamp(1, 30_000_000);
@@ -2512,7 +2512,7 @@ pub fn dev_import_project_files(
     )?))
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn dev_import_project_drop(
     input: DevImportProjectDropInput,
 ) -> Result<Vec<DevFileEntry>, String> {
@@ -2575,7 +2575,7 @@ pub fn dev_export_project(input: DevExportProjectInput) -> Result<Option<String>
     Ok(Some(export_project_to_directory(&root, &destination)?))
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn dev_export_project_paths(input: DevExportProjectPathsInput) -> Result<Vec<String>, String> {
     let root = canonical_root(&input.root)?;
     let destination = canonical_external_existing_path(&input.destination_directory)?;

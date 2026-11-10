@@ -1390,17 +1390,8 @@ test('FK当前Seedance型号规格与执行目录一致', () => {
   }
 })
 
-test('FK 分组排在视频最前，灵动组内首个模型为 ld-2.5特价-1-720', () => {
-  // 用户已将 FK 置顶；同时保留灵动组内既有排序。
-  const panel = readFileSync('src/components/creation/CreationPanel.vue', 'utf8')
-  const start = panel.indexOf("cpState.task === 'video'")
-  // 数组字面量里夹了注释，先剔掉注释行再断言第一条
-  const videoOrder = panel
-    .slice(start, start + 400)
-    .split('\n')
-    .filter(line => !line.trim().startsWith('//'))
-    .join('\n')
-  assert.match(videoOrder, /\[\s*'FK · Seedance 2\.5', '灵动seedace2\.5'/)
+test('灵动组内首个模型为 ld-2.5特价-1-720', () => {
+  // FK 置顶的分组顺序见 creationModelGroups.test.ts；这里保留灵动组内既有排序。
 
   const lingdong = listCreationModels({ task: 'video' })
     .filter(model => model.id.startsWith('newapi/lingdong/'))

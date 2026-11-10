@@ -189,14 +189,14 @@ test('web memory artifact tools generate real project files and keep same-name o
   const slideHtml = await files.read(project.id, '.raw/jc-media/文档/汇报.html')
   const slidePptx = new Uint8Array(await (await files.readBinary(project.id, '.raw/jc-media/文档/汇报.pptx')).arrayBuffer())
   assert.equal(await image.text(), 'PNG')
-  assert.deepEqual([...docx.slice(0, 2)], [0x50, 0x4b])
+  assert.deepEqual(Array.from(docx.slice(0, 2)), [0x50, 0x4b])
   assert.match(html.content, /<!doctype html>/i)
   assert.match(html.content, /<h1>周报<\/h1>/)
   assert.match(fullHtml.content, /<style>button\{color:red\}<\/style>/)
   assert.match(fullHtml.content, /<button>开始<\/button>/)
   assert.equal((slideHtml.content.match(/class="slide"/g) || []).length, 2)
   assert.match(slideHtml.content, /addEventListener\('keydown'/)
-  assert.deepEqual([...slidePptx.slice(0, 2)], [0x50, 0x4b])
+  assert.deepEqual(Array.from(slidePptx.slice(0, 2)), [0x50, 0x4b])
   assert.doesNotMatch(fullHtml.content, /&lt;button/)
   await assert.rejects(
     () => execute(call('create_html', { title: '半截网页', content: '<div>缺少网页结构</div>' })),

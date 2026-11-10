@@ -38,7 +38,7 @@ test('Desktop keeps the bundled list while Web exposes only user-installed Skill
   // 新建入口与修改对称：预填中央 Skill 根目录的绝对路径，模型才能直接落盘
   assert.match(webPanel, /emitEvent\('skill-creator-create', \{ skillsRoot: centralSkillsRoot\.value \}\)/)
   assert.match(webPanel, /@click="requestSkillCreate"/)
-  assert.match(webPanel, /store\.getCustomSkills\(\)\.find\(skill => \/\^\\\/\/\.test\(String\(skill\.packagePath \|\| ''\)\)\)/)
+  assert.match(webPanel, /store\.getCustomSkills\(\)\.find\(skill => String\(skill\.packagePath \|\| ''\)\.startsWith\('\/'\)\)/)
   assert.doesNotMatch(webPanel, /\.agents\/skills\/\$\{skill\.id\}\/SKILL\.md/)
   assert.match(webPanel, /修改<\/button>/)
   assert.match(webPanel, /await store\.createAgent\(skill\)/)

@@ -32,7 +32,7 @@ export function getCustomProviders(store: KeyValueStore = getStorage()): CustomP
     return parsed
       .map((p: Partial<CustomProviderConfig>) => sanitizeCustomProvider(p))
       .filter(Boolean) as CustomProviderConfig[]
-  } catch (_) {
+  } catch {
     return []
   }
 }
@@ -288,7 +288,7 @@ export function getLocalOllamaModels(store: KeyValueStore = getStorage()): JcMod
         providerId: LOCAL_OLLAMA_PROVIDER_ID,
       }))
       .filter(model => model.id)
-  } catch (_) {
+  } catch {
     return []
   }
 }
@@ -350,7 +350,7 @@ export function loadProvidersFromStorage(store: KeyValueStore = getStorage()): J
         ...(sanitizedOllama && sanitizedOllama.models.length > 0 ? [sanitizedOllama] : []),
       ]
     }
-  } catch (_) {}
+  } catch {}
 
   return [createDefaultProvider(legacyKey), ...(fallbackOllama ? [fallbackOllama] : [])]
 }
@@ -382,7 +382,7 @@ export function decodeApiKey(rawKey: string): string {
   try {
     const decoded = atob(apiKey)
     if (decoded.startsWith('sk-')) apiKey = decoded
-  } catch (_) {}
+  } catch {}
   return apiKey
 }
 

@@ -1,6 +1,5 @@
 import type {
   CanvasAsset,
-  CanvasDocument,
   CanvasDocumentV2,
   CanvasDocumentV3,
   CanvasSceneNode,

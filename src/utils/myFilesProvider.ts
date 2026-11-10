@@ -8,8 +8,6 @@
  * 未来切换到 ~/COMIC-BOX/ 中文目录 + symlink 方案时启用此模块。
  */
 
-import { isTauriRuntime } from './tauriEnv'
-
 const MY_FILES_DIR = 'COMIC-BOX'
 
 let homedir = ''

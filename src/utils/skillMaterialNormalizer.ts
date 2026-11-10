@@ -152,11 +152,6 @@ function safeNormalizePath(path: string): string {
   }
 }
 
-function extractSkillName(skillMd: string): string {
-  const match = skillMd.match(/^---[\s\S]*?\nname:\s*(.+)$/m)
-  return (match?.[1] || '未命名Skill').trim().replace(/^["']|["']$/g, '')
-}
-
 function inferMimeType(path: string): string {
   const lower = path.toLowerCase()
   if (lower.endsWith('.md')) return 'text/markdown'

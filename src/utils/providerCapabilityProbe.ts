@@ -261,9 +261,9 @@ function sanitizeProbeError(err: unknown, apiKey: string): string {
   if (apiKey) text = text.replaceAll(apiKey, '[REDACTED_API_KEY]')
   return text
     .replace(/Authorization\s*:\s*Bearer\s+[A-Za-z0-9._~+/=-]{12,}/gi, 'Authorization: Bearer [REDACTED_API_KEY]')
-    .replace(/Bearer\s+(?:sk|jc|or|wr)-[A-Za-z0-9_\-]{12,}/gi, 'Bearer [REDACTED_API_KEY]')
-    .replace(/\b(?:sk|jc|or|wr)-[A-Za-z0-9_\-]{20,}\b/gi, '[REDACTED_API_KEY]')
-    .replace(/\beyJ[A-Za-z0-9_\-]{3,}\.[A-Za-z0-9_\-]{3,}\.[A-Za-z0-9_\-]{3,}\b/g, '[REDACTED_JWT]')
+    .replace(/Bearer\s+(?:sk|jc|or|wr)-[A-Za-z0-9_-]{12,}/gi, 'Bearer [REDACTED_API_KEY]')
+    .replace(/\b(?:sk|jc|or|wr)-[A-Za-z0-9_-]{20,}\b/gi, '[REDACTED_API_KEY]')
+    .replace(/\beyJ[A-Za-z0-9_-]{3,}\.[A-Za-z0-9_-]{3,}\.[A-Za-z0-9_-]{3,}\b/g, '[REDACTED_JWT]')
     .slice(0, 240)
 }
 

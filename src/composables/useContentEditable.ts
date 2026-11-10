@@ -109,7 +109,6 @@ export function addPart(editor: HTMLElement, part: ContentPart) {
   if (!sel || sel.rangeCount === 0) return
 
   const cursorPos = getCursorPosition(editor)
-  const range = sel.getRangeAt(0)
 
   // 提取光标前文本，匹配 @xxx
   const textBeforeCursor = (editor.textContent || '').slice(0, cursorPos)

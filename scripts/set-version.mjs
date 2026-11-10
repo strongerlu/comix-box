@@ -27,7 +27,7 @@ if (arg === '--auto') {
       process.exit(1)
     }
     console.log(`🏷️ 从 Git tag 读取版本号: ${tag} → ${version}`)
-  } catch (e) {
+  } catch {
     console.error('❌ 无法获取 Git tag，请确保已打 tag 并推送')
     process.exit(1)
   }

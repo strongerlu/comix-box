@@ -11,6 +11,7 @@ import {
   normalizeMarkdownOutputFilename,
 } from '../documentMarkdown'
 import { detectFileType } from '@/composables/useFileUpload'
+import { __resetApiKeyMemoryCacheForTests } from '@/services/newApiClient'
 
 test('normalizeMarkdownOutputFilename keeps a single markdown extension', () => {
   assert.equal(normalizeMarkdownOutputFilename('救猫咪 3 反击战！.pdf'), '救猫咪 3 反击战！.md')
@@ -52,30 +53,77 @@ test('isMeaningfulMarkdownContent rejects empty page marker extraction', () => {
   assert.equal(isMeaningfulMarkdownContent('# 第一章\n\n真正的正文内容'), true)
 })
 
-test('Web document conversion uses the shared converter instead of a desktop-only rejection', () => {
-  const source = readFileSync(join(process.cwd(), 'src/utils/documentMarkdown.ts'), 'utf8')
+const cloudSuccess = { status: 200, headers: { 'content-type': 'application/json' }, body: JSON.stringify({ status: 'success', content: '# 云端结果' }) }
+const pdf = () => new File([Uint8Array.from([0x25, 0x50, 0x44, 0x46])], '剧本.pdf', { type: 'application/pdf' })
 
-  assert.match(source, /convertWebDocumentToMarkdown/)
-  assert.match(source, /documents\/markdown/)
-  assert.doesNotMatch(source, /TAURI_REQUIRED/)
+async function withDesktopInvoke(handler: (command: string) => unknown, run: (calls: string[]) => Promise<void>) {
+  const previous = Object.getOwnPropertyDescriptor(globalThis, 'window')
+  const calls: string[] = []
+  Object.defineProperty(globalThis, 'window', { configurable: true, value: { __TAURI_INTERNALS__: {
+    transformCallback: () => 1,
+    async invoke(command: string) { calls.push(command); return handler(command) },
+  } } })
+  __resetApiKeyMemoryCacheForTests('sk-test-document-key')
+  try { await run(calls) } finally {
+    __resetApiKeyMemoryCacheForTests(null)
+    if (previous) Object.defineProperty(globalThis, 'window', previous)
+    else delete (globalThis as { window?: unknown }).window
+  }
+}
+
+test('Web document conversion posts to the shared cloud converter', async () => {
+  const originalFetch = globalThis.fetch
+  const urls: string[] = []
+  globalThis.fetch = (async (url: string) => {
+    urls.push(String(url))
+    return new Response(JSON.stringify({ status: 'success', content: '# 网页结果' }), { headers: { 'content-type': 'application/json' } })
+  }) as typeof fetch
+  __resetApiKeyMemoryCacheForTests('sk-test-document-key')
+  try {
+    const result = await convertDocumentToMarkdown({ file: pdf() })
+    assert.equal(result.status, 'success')
+    assert.equal(result.content, '# 网页结果')
+    assert.equal(urls.length, 1)
+    assert.match(urls[0], /\/documents\/markdown$/)
+  } finally {
+    globalThis.fetch = originalFetch
+    __resetApiKeyMemoryCacheForTests(null)
+  }
 })
 
-test('Tauri document cloud fallback uses the native request while Mac keeps local-first conversion', () => {
-  const source = readFileSync(join(process.cwd(), 'src/utils/documentMarkdown.ts'), 'utf8')
-
-  assert.match(source, /!isTauriRuntime\(\) \|\| isTauriMobileRuntime\(\)/)
-  assert.match(source, /return convertWebDocumentToMarkdown\(input, maxChars, outputFilename\)/)
-  assert.match(source, /isTauriRuntime\(\)[\s\S]*document_markdown_request/)
-  assert.match(source, /invoke\('document_to_markdown_file'/)
-  assert.doesNotMatch(source, /rapidocr|shouldRetryWithOcr/)
+test('Desktop converts locally first and reaches the cloud only through the native request', async () => {
+  await withDesktopInvoke(command => command === 'document_to_markdown_file'
+    ? { status: 'success', content: '# 本地结果', engine: 'anydoc' }
+    : cloudSuccess, async calls => {
+    const result = await convertDocumentToMarkdown({ file: pdf() })
+    assert.equal(result.content, '# 本地结果')
+    assert.deepEqual(calls, ['document_to_markdown_file'])
+  })
 })
 
-test('Desktop only falls back to cloud for an internal local parser failure', () => {
-  const source = readFileSync(join(process.cwd(), 'src/utils/documentMarkdown.ts'), 'utf8')
-
-  assert.match(source, /localResult\.errorCode === 'internal'[\s\S]*convertWebDocumentToMarkdown\(input, maxChars, outputFilename\)/)
-  assert.match(source, /: localResult/)
-  assert.match(source, /catch \(err\) \{\s*return convertWebDocumentToMarkdown\(input, maxChars, outputFilename\)/)
+test('Desktop only falls back to cloud for an internal local parser failure', async () => {
+  await withDesktopInvoke(command => command === 'document_to_markdown_file'
+    ? { status: 'error', errorCode: 'internal', engine: 'unsupported' }
+    : cloudSuccess, async calls => {
+    const result = await convertDocumentToMarkdown({ file: pdf() })
+    assert.equal(result.content, '# 云端结果')
+    assert.deepEqual(calls, ['document_to_markdown_file', 'document_markdown_request'])
+  })
+  await withDesktopInvoke(command => command === 'document_to_markdown_file'
+    ? { status: 'error', errorCode: 'unsupported_format', message: '不支持的格式' }
+    : cloudSuccess, async calls => {
+    const result = await convertDocumentToMarkdown({ file: pdf() })
+    assert.equal(result.status, 'error')
+    assert.equal(result.errorCode, 'unsupported_format')
+    assert.deepEqual(calls, ['document_to_markdown_file'])
+  })
+  await withDesktopInvoke(command => {
+    if (command === 'document_to_markdown_file') throw new Error('converter crashed')
+    return cloudSuccess
+  }, async calls => {
+    assert.equal((await convertDocumentToMarkdown({ file: pdf() })).content, '# 云端结果')
+    assert.deepEqual(calls, ['document_to_markdown_file', 'document_markdown_request'])
+  })
 })
 
 test('Web document conversion rejects an HTML fallback even when it has HTTP 200', () => {

@@ -164,7 +164,7 @@ export function useFileStore() {
         sourceSessionId: conversation.id,
         sourceMessageIds: messages.map((message: HistoryMessage) => message.id).filter((id): id is string => Boolean(id)),
         metadata: {
-          ...(existing?.metadata || {}),
+          ...existing?.metadata,
           kind: 'session-history',
           originalId: conversation.id,
           agentId: conversation.agentId || conversation.scopeKey || '',
@@ -204,7 +204,7 @@ export function useFileStore() {
         createdAt: existingFolder?.createdAt || skill.createdAt || Date.now(),
         updatedAt: skill.updatedAt || Date.now(),
         metadata: {
-          ...(existingFolder?.metadata || {}),
+          ...existingFolder?.metadata,
           kind: 'skill-folder',
           isFolder: true,
           children: [coreId],

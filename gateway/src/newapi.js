@@ -3,7 +3,7 @@ import { upstreamError } from './errors.js';
 import { ensureLegacyManagedTokenKey } from './auth-service.js';
 
 function sanitizePayload(payload) {
-  const next = { ...(payload || {}) };
+  const next = { ...payload };
   delete next.apiKey;
   delete next.api_key;
   delete next.baseUrl;
@@ -17,7 +17,7 @@ function newApiBase(env) {
 }
 
 function requestFor(baseUrl, token, payload, { userId = '', stream = false } = {}) {
-  const safePayload = sanitizePayload({ ...(payload || {}), ...(stream ? { stream: true } : {}) });
+  const safePayload = sanitizePayload({ ...payload, ...(stream ? { stream: true } : {}) });
   const headers = {
     'Content-Type': 'application/json',
     Authorization: `Bearer ${token}`,

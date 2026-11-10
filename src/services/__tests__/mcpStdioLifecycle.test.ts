@@ -10,7 +10,7 @@ const rustMcp = readFileSync(join(process.cwd(), 'src-tauri/src/commands/mcp.rs'
 const sdkClient = readFileSync(join(process.cwd(), 'node_modules/@modelcontextprotocol/sdk/dist/esm/client/index.js'), 'utf8')
 
 test('stdio MCP uses the node tsx entrypoint and protocol timeouts', () => {
-  assert.match(client, /tsx\\\/dist\\\/cli\\\.mjs/)
+  assert.match(client, /\/tsx\/dist\/cli\.mjs/)
   assert.match(client, /const isNpx =/)
   assert.match(client, /lib\/node_modules\/npm\/bin\/npx-cli\.js/)
   assert.match(client, /timeout: STDIO_TIMEOUT/)

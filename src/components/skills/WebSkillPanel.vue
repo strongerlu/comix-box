@@ -35,7 +35,7 @@ onMounted(async () => {
 const centralSkillsRoot = computed(() => {
   const scanned = String(manage.centralRoot || '').trim().replace(/\/+$/, '')
   if (scanned.startsWith('/') || /^[A-Za-z]:\//.test(scanned)) return scanned
-  const packaged = store.getCustomSkills().find(skill => /^\//.test(String(skill.packagePath || '')))
+  const packaged = store.getCustomSkills().find(skill => String(skill.packagePath || '').startsWith('/'))
   return String(packaged?.packagePath || '').replace(/\/[^/]+$/, '')
 })
 

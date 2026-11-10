@@ -12,7 +12,7 @@ test('renderMessageMarkdown escapes user HTML without rewriting it as Markdown',
 })
 
 test('renderMessageMarkdown keeps unsafe assistant links inert after sanitization', () => {
-  const html = renderMessageMarkdown('[bad](javascript:alert(1) \"x\\\" onmouseover=alert(1)\")', 'assistant')
+  const html = renderMessageMarkdown('[bad](javascript:alert(1) "x\\\" onmouseover=alert(1)")', 'assistant')
 
   assert.match(html, />bad<\/a>/)
   assert.equal(html.includes('javascript:'), false)

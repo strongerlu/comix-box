@@ -16,7 +16,7 @@
  *   node scripts/codemod-mso-to-jcicon.mjs           # dry-run，只统计
  *   node scripts/codemod-mso-to-jcicon.mjs --write   # 实际改写
  */
-import { readFileSync, writeFileSync, readdirSync, statSync, existsSync } from 'node:fs'
+import { readFileSync, writeFileSync, readdirSync, statSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { dirname, join } from 'node:path'
 

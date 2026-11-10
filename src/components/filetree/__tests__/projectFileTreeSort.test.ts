@@ -15,18 +15,8 @@ test('file tree sorts at display time by the mode the user picked', () => {
   assert.match(tree, /return isFileSortMode\(stored\) \? stored : DEFAULT_FILE_SORT_MODE/)
   assert.match(tree, /localStorage\.setItem\(FILE_SORT_STORAGE_KEY, mode\)/)
 
-  // 屏幕顺序的唯一真源：目录永远优先，同级按当前模式。
-  assert.match(tree, /function sortedChildren\(children: TreeNode\[\], mode: FileSortMode\): TreeNode\[\]/)
-  assert.match(
-    tree,
-    /if \(a\.isDir !== b\.isDir\) return a\.isDir \? -1 : 1\s*\n\s*return compareFileEntries\(a, b, mode\)/,
-  )
-  // 两个展开入口（根目录 + 已展开的子目录）都走它；排序放在展开这一步，换排序不用重读目录。
-  assert.match(tree, /for \(const child of sortedChildren\(root\.children, mode\)\) walk\(child\)/)
-  assert.match(
-    tree,
-    /if \(node\.expanded && node\.isDir\) for \(const child of sortedChildren\(node\.children, mode\)\) walk\(child\)/,
-  )
+  // 展开视图按用户选的模式排序（排序行为见 projectTree.test.ts）。
+  assert.match(tree, /flattenVisible\(root, filterQuery\.value, fileSortMode\.value\)/)
 
   // 菜单项直接来自 FILE_SORT_OPTIONS，不另建映射表。
   assert.match(tree, /v-for="option in FILE_SORT_OPTIONS"/)

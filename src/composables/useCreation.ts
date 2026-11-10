@@ -443,7 +443,7 @@ export function saveCpState() {
       language, startTime, endTime, width, height, value, mv, ar, size, res, dur, fieldValues: stableFieldValues,
       results: trimmedResults,
     }))
-  } catch (e) {
+  } catch {
     // 存储失败时至少保存非结果部分
     try {
       const { task, modelKey, prompt, tags, title, ar, size, res, dur } = cpState

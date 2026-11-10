@@ -3,7 +3,7 @@ import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { test } from 'node:test'
 import { createRequire } from 'node:module'
-import { computed, effectScope, nextTick, reactive, ref, watch } from 'vue'
+import { nextTick, reactive, ref, watch } from 'vue'
 
 import { creationTaskStage, matchesCreationTaskFilter, creationModelDisplayLabel } from '@/utils/creationPresentation'
 import { skillDisplayLabel } from '@/utils/skillDisplayLabel'
@@ -400,7 +400,7 @@ test('canvas annotations are local to the selected image and export only that im
   assert.match(source, /size: naturalSize/)
   assert.match(source, /asset\.kind === 'image'\s+\? await getCanvasImageRequestUrl\(node, asset\.id, mediaPath, owner, maxBytes, objectUrls\)/)
   assert.match(source, /URL\.createObjectURL\(exported\.data\)/)
-  assert.match(source, /if \(maxBytes \&\& exported\.data\.size > maxBytes\)/)
+  assert.match(source, /if \(maxBytes &\& exported\.data\.size > maxBytes\)/)
   assert.match(source, /const imageAtEvent = \(event: any\)/)
   assert.match(source, /const imageAtEventForNode = \(event: any, node: any\)/)
   assert.doesNotMatch(source, /请先选中一张图片后标注/)
@@ -574,7 +574,7 @@ test('creation panel clears a recovered canvas error and preserves its real fail
 
   assert.match(
     source,
-    /function reportCanvasRestoreFailure\(error: unknown\)[\s\S]*?画布无法打开: \$\{reason}\。原文件未被覆盖/,
+    /function reportCanvasRestoreFailure\(error: unknown\)[\s\S]*?画布无法打开: \$\{reason}。原文件未被覆盖/,
   )
   assert.match(
     source,
@@ -1166,23 +1166,6 @@ test('canvas context media exposes an owner-scoped source-file location action',
   assert.match(source, /canvasStore.assets\[ctxMenu.value.assetId\]/)
 })
 
-test('jc 本机分组排在模型菜单最后', () => {
-  const source = readFileSync(join(root, 'src/components/creation/CreationPanel.vue'), 'utf8')
-  const start = source.indexOf('const order = cpState.task')
-  const order = source.slice(start, source.indexOf('return [...groups].sort', start))
-  // 三套任务各自的顺序表都要以「其他模型 → jc 本机」收尾。
-  assert.equal((order.match(/'其他模型',\s*'jc 本机',\s*\]/g) || []).length, 3)
-  assert.doesNotMatch(order, /'jc 本机', '菠萝'|'FK · H3', 'jc 本机'/)
-})
-
-test('生图菜单里 FK 图片组排在灵动前面', () => {
-  const source = readFileSync(join(root, 'src/components/creation/CreationPanel.vue'), 'utf8')
-  const start = source.indexOf('const order = cpState.task')
-  const imageOrder = source.slice(start, source.indexOf(": cpState.task === 'video'", start))
-  // 两族都在表里（不在表里的组 indexOf 返回 -1，会被顶到最前面）。
-  assert.match(imageOrder, /'FK-Image',\s*'灵动seedace2\.5',/)
-})
-
 test('切图入口挂在媒体查看器，两个宿主都按截帧同一套落地', () => {
   const viewer = readFileSync(join(root, 'src/components/media/MediaViewer.vue'), 'utf8')
   assert.match(viewer, /splitEnabled\?: boolean/)
@@ -1306,36 +1289,6 @@ test('history thumbnails keep frozen project ownership and release stale asynchr
   assert.deepEqual(releases, ['old'])
   stop()
   assert.deepEqual(releases, ['old', 'new'])
-})
-
-
-test('history filters and search keep pagination in range and preserve original task objects', async () => {
-  const source = readFileSync(join(root, 'src/components/creation/CreationPanel.vue'), 'utf8')
-  const block = source.slice(source.indexOf('const taskFilter ='), source.indexOf('function pad('))
-  const { transformSync } = createRequire(join(root, 'package.json'))('esbuild')
-  const tasks = ref(Array.from({ length: 45 }, (_, index) => ({ id: `task-${index}`, status: index === 0 ? 'failed' : 'success', projectPath: index ? `图片/${index}.png` : undefined, prompt: index === 0 ? 'retry-me' : 'landscape', model: 'test-model' })))
-  const scope = effectScope()
-  const state = scope.run(() => new Function('computed', 'ref', 'watch', 'creationTasks', 'matchesCreationTaskFilter', 'creationTaskStage',
-    transformSync(block, { loader: 'ts' }).code + '; return { taskFilter, taskSearch, taskPageSize, taskPage, totalTaskPages, pagedCreationTasks, creationTasksTotal }'
-  )(computed, ref, watch, tasks, matchesCreationTaskFilter, creationTaskStage))
-  state.taskPage.value = 3
-  assert.equal(state.pagedCreationTasks.value[0], tasks.value[40])
-  state.taskFilter.value = 'attention'
-  await nextTick()
-  assert.equal(state.taskPage.value, 1)
-  assert.equal(state.creationTasksTotal.value, 1)
-  assert.equal(state.pagedCreationTasks.value[0], tasks.value[0])
-  state.taskSearch.value = 'no-match'
-  await nextTick()
-  assert.equal(state.creationTasksTotal.value, 0)
-  assert.equal(state.totalTaskPages.value, 1)
-  state.taskFilter.value = 'all'
-  state.taskSearch.value = ''
-  state.taskPageSize.value = 10
-  await nextTick()
-  assert.equal(state.pagedCreationTasks.value.length, 10)
-  assert.equal(tasks.value.length, 45)
-  scope.stop()
 })
 
 

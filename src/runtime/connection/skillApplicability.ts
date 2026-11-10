@@ -108,7 +108,7 @@ function extractHeadings(markdown: string): string {
 
 function tokenize(value: string): string[] {
   return String(value || '')
-    .split(/[\s,，。；;、：:（）()【】\[\]《》"'“”‘’/\\|]+/)
+    .split(/[\s,，。；;、：:（）()【】[\]《》"'“”‘’/\\|]+/)
     .map(term => term.trim())
     .filter(Boolean)
 }

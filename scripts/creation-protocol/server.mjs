@@ -219,7 +219,7 @@ export async function createCreationProtocolServer(config) {
       return
     }
     const a = task.adapter.submit
-    let payload = { ...(a.defaults || {}), ...task.params, model: task.model }
+    let payload = { ...a.defaults, ...task.params, model: task.model }
     const slotUrls = {}
     for (const [from, to] of Object.entries(a.rename || {})) if (Object.hasOwn(payload, from)) { payload[to] = payload[from]; delete payload[from] }
     for (const [slot, assets] of Object.entries(task.inputs)) {
