@@ -6,6 +6,30 @@ export interface CreationRequestIdentity {
   fingerprint: string
 }
 
+export type PreSubmitCreationStage = 'validation' | 'upload'
+type PreSubmitCreationError = Error & { creationStage: PreSubmitCreationStage }
+
+export function preSubmitCreationError(stage: PreSubmitCreationStage, message: string): Error {
+  return Object.assign(new Error(message), { creationStage: stage })
+}
+
+export function preSubmitCreationStage(error: unknown): PreSubmitCreationStage | undefined {
+  const stage = (error as Partial<PreSubmitCreationError> | undefined)?.creationStage
+  return stage === 'validation' || stage === 'upload' ? stage : undefined
+}
+
+/** Tags failures of a step that runs strictly before the generation request is sent. */
+export async function duringPreSubmitCreation<T>(stage: PreSubmitCreationStage, run: () => T | Promise<T>): Promise<T> {
+  try {
+    return await run()
+  } catch (error) {
+    if (error instanceof Error && error.name !== 'AbortError' && !preSubmitCreationStage(error)) {
+      Object.assign(error, { creationStage: stage })
+    }
+    throw error
+  }
+}
+
 const TRANSPORT_FAILURE = /signal is aborted|operation was aborted|AbortError|ETIMEDOUT|ECONNRESET|ECONNREFUSED|socket hang up|failed to fetch|fetch failed|error sending request|network|超时|连接|网络|无上游任务\s*ID|HTTP\s*(?:408|500|502|503|504)\b/i
 
 export function hasRecoverableResultFailure(task: { upstreamTaskId?: string; status?: string; errorMsg?: string; error?: { message?: string } }): boolean {

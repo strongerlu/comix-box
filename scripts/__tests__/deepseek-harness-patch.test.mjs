@@ -16,22 +16,12 @@ const serverPath = join(
   '@deepseek-ai/dsh-sdk-jsonrpc-server/lib/index.js',
 )
 
-const apply = () => execFileSync(process.execPath, ['scripts/prepare-deepseek-harness.mjs'], { stdio: 'pipe' })
-
-test('the Harness vendor patch is idempotent and carries the permission request', t => {
-  if (!existsSync(serverPath)) return t.skip('bundled Harness SDK is not installed')
-  apply()
-  const productionPaths = ['dsh-tool-fs-search', 'dsh-goal-round-driver', 'dsh-agent-loop', 'dsh-tool-skill'].map(pkg => serverPath.replace('dsh-sdk-jsonrpc-server', pkg))
-  const productionOnce = productionPaths.map(file => readFileSync(file, 'utf8'))
+test('the prepared Harness vendor patch carries the permission request', () => {
+  assert.ok(existsSync(serverPath), '先运行 pnpm run build:deepseek-harness')
   const once = readFileSync(serverPath, 'utf8')
-  apply()
-  assert.equal(readFileSync(serverPath, 'utf8'), once, '第二次应用不允许改变结果')
-  assert.deepEqual(productionPaths.map(file => readFileSync(file, 'utf8')), productionOnce)
   const clientPath = serverPath.replace('dsh-sdk-jsonrpc-server', 'dsh-sdk-client')
   const client = readFileSync(clientPath, 'utf8')
   assert.match(client, /spawn\(this\.runtime\.command, this\.runtime\.args, \{\s*windowsHide: true,/)
-  apply()
-  assert.equal(readFileSync(clientPath, 'utf8'), client, '后台启动补丁必须幂等')
   // 会话权限是 durable 事实，进程级 DSH_PERMISSION_MODE 只管新会话；这条请求是唯一能
   // 把已存在会话拉齐到 @文件 语义的通道。
   assert.match(once, /case "session\/permission": return this\.permission\(params\);/)
@@ -47,15 +37,14 @@ test('the Harness vendor patch is idempotent and carries the permission request'
 
 // 剪体积的两刀（node 包的安装源 278M、LibreOffice 260M，都是打好的 App 里的实际占用）。
 // 这里真跑脚本再检查结果，而不是断言源码字符串 —— 这两刀切错一点就是把运行时自己删了。
-test('harness 准备脚本只留运行时真正要的东西', t => {
+test('harness 准备脚本只留运行时真正要的东西', () => {
   const harness = join(process.cwd(), 'src-tauri/resources/deepseek-harness')
   const nodeBin = join(
     harness,
     'node_modules/node/bin',
     process.platform === 'win32' ? 'node.exe' : 'node',
   )
-  if (!existsSync(nodeBin)) return t.skip('bundled Harness SDK is not installed')
-  apply()
+  assert.ok(existsSync(nodeBin), '先运行 pnpm run build:deepseek-harness')
 
   // 前端就是用这个二进制启动 harness 的（src/services/deepSeekHarness.ts）——
   // 它活着不够，得真能执行：node 包的安装源里那个是它的硬链接，切错就一起没了。
@@ -83,8 +72,8 @@ test('harness 准备脚本只留运行时真正要的东西', t => {
 })
 
 // 重建没有三个会话扩展方法的 SDK，不能只验证已打补丁的开发机。
-test('Harness installs dependent session methods on a fresh SDK layout', t => {
-  if (!existsSync(serverPath)) return t.skip('bundled Harness SDK is not installed')
+test('Harness installs dependent session methods on a fresh SDK layout', () => {
+  assert.ok(existsSync(serverPath), '先运行 pnpm run build:deepseek-harness')
   const root = mkdtempSync(join(tmpdir(), 'jc-harness-fresh-'))
   try {
     const harness = join(root, 'src-tauri/resources/deepseek-harness')

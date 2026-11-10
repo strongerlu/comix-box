@@ -1,4 +1,5 @@
-import { reactive, computed, ref } from 'vue'
+import { reactive, computed, ref, watch } from 'vue'
+import { localComfyVideos } from '@/runtime/creation/localComfyVideo'
 import {
   type CreationTask,
   type CreationModel,
@@ -19,6 +20,7 @@ import {
 } from '@/data/mediaModelCapabilities'
 import {
   CREATION_MODEL_REGISTRY,
+  getAllCreationModelSpecs,
   YIHONG_GPT_IMAGE_RESOLUTIONS,
   getYihongGptImageResolutions,
   getCreationModelSpec,
@@ -34,6 +36,7 @@ import { fetchCreationModelAvailability } from '@/services/creationModelAvailabi
 import { applyRemoteCatalog, restoreRemoteCatalog } from '@/runtime/creation/remoteCreationCatalog'
 import { normalizeCreationTextField, sanitizeCreationResults } from '@/utils/creationResults'
 import type { ProjectResource } from '@/utils/projectResource'
+import type { CreationPlanSnapshot, MediaTask } from '@/stores/mediaTaskStore'
 
 export type CreationFieldValue = string | number | boolean | string[] | ProjectResource
 
@@ -272,6 +275,10 @@ function durationValuesFor(spec: CreationModelSpec): number[] {
   const duration = spec.capabilities.duration
   if (duration?.allowedValues?.length) return duration.allowedValues
   if (duration?.min !== undefined && duration.max !== undefined) {
+    if (spec.apiStyle === 'comfy-workflow-video') {
+      if (duration.min > duration.max) return []
+      return duration.min === duration.max ? [duration.min] : [duration.min, duration.max]
+    }
     const values: number[] = []
     for (let value = duration.min; value <= duration.max; value += 1) values.push(value)
     return values
@@ -296,9 +303,10 @@ const catalogVersion = ref(0)
 
 function rebuildCreationPanelModels() {
   for (const key of Object.keys(CREATION_PANEL_MODELS)) delete CREATION_PANEL_MODELS[key]
-  for (const spec of CREATION_MODEL_REGISTRY) CREATION_PANEL_MODELS[spec.id] = specToCreationModel(spec)
+  for (const spec of getAllCreationModelSpecs()) CREATION_PANEL_MODELS[spec.id] = specToCreationModel(spec)
 }
 rebuildCreationPanelModels()
+watch(localComfyVideos, () => { rebuildCreationPanelModels(); catalogVersion.value += 1 }, { flush: 'sync' })
 
 export function getVisibleCreationTasks(): CreationTask[] {
   return (Object.keys(MEDIA_TASK_LABELS) as CreationTask[])
@@ -718,7 +726,9 @@ export const durationRange = computed(() => {
   const m = currentModel.value
   if (!m?.dur || m.dur.length < 1) return null
   if (m.dur.length === 1) return { min: m.dur[0], max: m.dur[0], step: 1, fixed: true }
-  return { min: m.dur[0], max: m.dur[m.dur.length - 1], step: 1, fixed: false }
+  const step = currentCreationSpec.value?.apiStyle === 'comfy-workflow-video'
+    ? getMediaFieldCompat(m, 'duration')?.step ?? 1 : 1
+  return { min: m.dur[0], max: m.dur[m.dur.length - 1], step, fixed: false }
 })
 
 export const hasDuration = computed(() => !!durationRange.value)
@@ -773,7 +783,18 @@ export function switchTask(task: CreationTask) {
 }
 
 export function switchModel(key: string) {
-  cpState.modelKey = resolveCreationModelKey(key)
+  const next = resolveCreationModelKey(key)
+  const spec = getCreationModelSpec(next)
+  if (next !== cpState.modelKey && spec?.apiStyle === 'comfy-workflow-video') {
+    for (const field of spec.fields) {
+      if (field.defaultValue === undefined) continue
+      if (field.key === 'width') cpState.width = Number(field.defaultValue)
+      if (field.key === 'height') cpState.height = Number(field.defaultValue)
+      if (field.key === 'seed') cpState.fieldValues.seed = Number(field.defaultValue)
+      if (field.key === 'duration') cpState.dur = Number(field.defaultValue)
+    }
+  }
+  cpState.modelKey = next
   syncParams()
   saveCpState()
 }
@@ -803,8 +824,12 @@ function syncParams() {
   }
   // duration
   if (m.dur && m.dur.length >= 1) {
-    if (cpState.dur < m.dur[0]) cpState.dur = m.defDur || m.dur[0]
-    if (cpState.dur > m.dur[m.dur.length - 1]) cpState.dur = m.defDur || m.dur[0]
+    const acceptsFraction = currentCreationSpec.value?.apiStyle === 'comfy-workflow-video'
+      && getMediaFieldCompat(m, 'duration')?.step !== 1
+    if (cpState.dur < m.dur[0] || cpState.dur > m.dur[m.dur.length - 1]
+      || (!acceptsFraction && !Number.isInteger(cpState.dur))) {
+      cpState.dur = m.defDur || m.dur[0]
+    }
   }
   const mv = getMediaFieldCompat(m, 'mv')
   if (mv?.defaultValue && !mvOptions.value.includes(cpState.mv)) cpState.mv = String(mv.defaultValue)
@@ -856,9 +881,76 @@ export function setResolution(res: string) {
   }
   saveCpState()
 }
-export function setDuration(dur: number) { cpState.dur = Math.round(dur); saveCpState() }
+export function setDuration(dur: number) {
+  cpState.dur = currentCreationSpec.value?.apiStyle === 'comfy-workflow-video' ? dur : Math.round(dur)
+  saveCpState()
+}
 export function setMv(mv: string) { cpState.mv = mv; saveCpState() }
 export function setLanguage(language: string) { cpState.language = language; saveCpState() }
+
+export function canRegenerateCreationTask(task: Pick<MediaTask, 'source' | 'status' | 'planSnapshot'>): boolean {
+  return (
+    task.source === 'creation' &&
+    (task.status === 'success' || task.status === 'failed' || task.status === 'cancelled') &&
+    Boolean(task.planSnapshot)
+  )
+}
+
+/** Selects the snapshot's task and model; AI apps must discover their nodes before {@link applyPlanSnapshotParams}. */
+export function beginPlanSnapshotPrefill(plan: CreationPlanSnapshot): boolean {
+  const isAiApp = plan.apiStyle === 'rh-aiapp'
+  switchTask(isAiApp ? 'ai-app' : plan.task)
+  switchModel(plan.modelId)
+  cpState.fieldValues = {}
+  if (isAiApp) {
+    const params = plan.normalizedParams
+    cpState.aiAppWebappId = typeof params.webappId === 'string' ? params.webappId : ''
+    const outputType = params.outputType
+    cpState.aiAppOutputType = outputType === 'image' || outputType === 'audio' || outputType === 'video'
+      ? outputType
+      : plan.task === 'image' || plan.task === 'audio' || plan.task === 'video' ? plan.task : ''
+    cpState.aiAppBillingModel = typeof params.billingModel === 'string' ? params.billingModel : ''
+    cpState.aiAppLabel = ''
+    cpState.aiAppFields = []
+  }
+  return isAiApp
+}
+
+/** Restores snapshot parameters and prompt without submitting; reference files must be reselected. */
+export function applyPlanSnapshotParams(plan: CreationPlanSnapshot, prompt: string): { hasReferences: boolean } {
+  const params = plan.normalizedParams
+  const ratio = params.ratio ?? params.aspectRatio ?? params.aspect_ratio
+  if (typeof ratio === 'string') setAspect(ratio)
+  if (typeof params.resolution === 'string') setResolution(params.resolution)
+  if (typeof params.duration === 'number') setDuration(params.duration)
+  for (const [key, stateKey] of Object.entries({
+    title: 'title', tags: 'tags', negative_tags: 'negativeTags', text: 'text', ref_text: 'refText',
+    voice_prompt: 'voicePrompt', language: 'language', start_time: 'startTime', end_time: 'endTime',
+    width: 'width', height: 'height', value: 'value', size: 'size', mv: 'mv',
+  })) {
+    if (params[key] !== undefined) (cpState as unknown as Record<string, unknown>)[stateKey] = params[key]
+  }
+  for (const field of currentCreationSpec.value?.fields || []) {
+    const value = params[field.key]
+    if (value !== undefined && ['string', 'number', 'boolean'].includes(typeof value)) {
+      cpState.fieldValues[field.key] = value as string | number | boolean
+    }
+  }
+  if (plan.apiStyle === 'rh-aiapp') {
+    for (const [key, value] of Object.entries(params)) {
+      if (key.includes(':') && value !== undefined && value !== null && value !== '' && ['string', 'number', 'boolean'].includes(typeof value)) {
+        cpState.fieldValues[key] = value as string | number | boolean
+      }
+    }
+  }
+  cpState.prompt = prompt
+  cpState.files = []
+  const hasReferences = ['images', 'image', 'videos', 'video', 'audios', 'audio'].some(key => {
+    const value = params[key]
+    return Array.isArray(value) ? value.length > 0 : Boolean(value)
+  })
+  return { hasReferences }
+}
 
 // Normalize persisted values before computed run plans validate them.
 syncParams()

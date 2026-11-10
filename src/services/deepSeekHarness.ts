@@ -586,12 +586,6 @@ function deepSeekReadFileMeta(meta: any): DeepSeekReadFileMeta | undefined {
   }
 }
 
-function deepSeekMessageText(content: any): string {
-  return Array.isArray(content)
-    ? content.filter(block => block?.type === 'text').map(block => String(block.text || '')).join('')
-    : ''
-}
-
 /**
  * 官方对「正文」的判据，逐字对齐 `dsh-client-ui-chat` 的 `visibleAssistantEvent` /  
  * `hasAssistantReplyContent`：`tool-call` 块不算正文；`text` 块必须 `trim()` 后非空。

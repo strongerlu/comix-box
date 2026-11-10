@@ -1,6 +1,7 @@
 import type { McpServerConfig } from '@/stores/mcpStore'
 import type { MediaResult } from '@/api/media-generation'
 import { isLocalNetworkHost } from '@/utils/providerConfig'
+import { duringPreSubmitCreation } from '@/runtime/creation/submissionSafety'
 
 export const COMFY_MCP_VERSION = '0.10.0'
 export const COMFY_CLI_VERSION = '1.20.0'
@@ -26,16 +27,30 @@ export interface ComfyWorkflowIO {
   target: string
   call(name: string, args: Record<string, unknown>, signal?: AbortSignal): Promise<any>
   write(id: string, name: string, dataBase64: string): Promise<string>
-  read(path: string, type: 'image' | 'video'): Promise<string>
+  read(path: string): Promise<string>
+  locate(path: string): string
   removeWorkflow(id: string): Promise<void>
+}
+
+const OUTPUT_MIME: Record<string, string> = {
+  mp4: 'video/mp4', webm: 'video/webm', mov: 'video/quicktime',
+  png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', webp: 'image/webp',
+}
+
+export function comfyOutputMime(path: string): string {
+  return OUTPUT_MIME[path.split('.').at(-1)?.toLowerCase() || ''] || 'application/octet-stream'
+}
+
+/** Rust canonicalizes Windows extended paths and enforces UUID/outputs containment. */
+export async function readComfyOutputBase64(path: string): Promise<string> {
+  const { invoke } = await import('@tauri-apps/api/core')
+  return invoke<string>('comfy_mcp_read_output', { path })
 }
 
 async function connectedIO(serverId?: string): Promise<ComfyWorkflowIO> {
   const { useMcpStore } = await import('@/stores/mcpStore')
   const { callMcpToolResult } = await import('./mcpClient')
-  const { invoke } = await import('@tauri-apps/api/core')
-  const { readFile, remove } = await import('@tauri-apps/plugin-fs')
-  const { appDataDir, join } = await import('@tauri-apps/api/path')
+  const { invoke, convertFileSrc } = await import('@tauri-apps/api/core')
   const store = useMcpStore()
   await store.ensureLoaded()
   const candidates = store.connectedServers.filter(isComfyMcpServer)
@@ -57,21 +72,10 @@ async function connectedIO(serverId?: string): Promise<ComfyWorkflowIO> {
       return values.length === 1 ? values[0] : values
     },
     write: (id, name, dataBase64) => invoke<string>('comfy_mcp_write_input', { id, name, dataBase64 }),
-    async read(path, type) {
-      const root = await join(await appDataDir(), 'comfy-mcp')
-      const normalized = path.replaceAll('\\', '/')
-      if (!normalized.startsWith(root.replaceAll('\\', '/') + '/') || normalized.split('/').includes('..')) throw new Error('官方 MCP 返回了工作目录之外的结果')
-      const bytes = await readFile(path)
-      if (!bytes.length) throw new Error('官方 MCP 输出文件为空')
-      let binary = ''
-      for (let i = 0; i < bytes.length; i += 8192) binary += String.fromCharCode(...bytes.subarray(i, i + 8192))
-      const ext = path.split('.').at(-1)?.toLowerCase()
-      const mime = type === 'video' ? (ext === 'webm' ? 'video/webm' : 'video/mp4') : (ext === 'jpg' || ext === 'jpeg' ? 'image/jpeg' : ext === 'webp' ? 'image/webp' : 'image/png')
-      return `data:${mime};base64,${btoa(binary)}`
-    },
+    read: async path => `data:${comfyOutputMime(path)};base64,${await readComfyOutputBase64(path)}`,
+    locate: path => convertFileSrc(path),
     async removeWorkflow(id) {
-      const path = await join(await appDataDir(), 'comfy-mcp', id, 'workflow.json')
-      await remove(path)
+      await invoke('comfy_mcp_remove_workflow', { id })
     },
   }
 }
@@ -93,23 +97,31 @@ export async function runComfyWorkflow(input: {
   const id = crypto.randomUUID()
   let workflowWritten = false
   const names: string[] = []
+  const cleanup = async () => {
+    if (!workflowWritten) return
+    workflowWritten = false
+    try { await io!.removeWorkflow(id) }
+    catch { console.warn('[ComfyUI] 临时工作流清理失败，原任务继续；文件保留在应用私有目录') }
+  }
   try {
-    for (const [index, image] of (input.references || []).entries()) {
-      checkAbort(input.signal)
-      const match = /^data:(image\/(?:png|jpeg|webp));base64,(.+)$/s.exec(image)
-      if (!match) throw new Error(`参考图 ${index + 1} 不是可上传的 PNG、JPEG 或 WebP`)
-      const extension = match[1] === 'image/jpeg' ? 'jpg' : match[1].split('/')[1]
-      const path = await io.write(id, `reference-${index}.${extension}`, match[2])
-      const uploaded = await io.call('upload_file', { paths: [path], overwrite: false }, input.signal)
-      const item = uploaded.uploads?.[0]
-      if (!item?.cloud_name) throw new Error('官方 MCP 未返回上传文件名')
-      names.push(item.subfolder ? `${item.subfolder}/${item.cloud_name}` : item.cloud_name)
-    }
-    const text = JSON.stringify(input.buildWorkflow(names))
+    await duringPreSubmitCreation('upload', async () => {
+      for (const [index, image] of (input.references || []).entries()) {
+        checkAbort(input.signal)
+        const match = /^data:(image\/(?:png|jpeg|webp));base64,(.+)$/s.exec(image)
+        if (!match) throw new Error(`参考图 ${index + 1} 不是可上传的 PNG、JPEG 或 WebP`)
+        const extension = match[1] === 'image/jpeg' ? 'jpg' : match[1].split('/')[1]
+        const path = await io.write(id, `reference-${index}.${extension}`, match[2])
+        const uploaded = await io.call('upload_file', { paths: [path], overwrite: false }, input.signal)
+        const item = uploaded.uploads?.[0]
+        if (!item?.cloud_name) throw new Error('官方 MCP 未返回上传文件名')
+        names.push(item.subfolder ? `${item.subfolder}/${item.cloud_name}` : item.cloud_name)
+      }
+    })
+    const text = JSON.stringify(await duringPreSubmitCreation('validation', () => input.buildWorkflow(names)))
     const bytes = new TextEncoder().encode(text)
     let binary = ''
     for (let i = 0; i < bytes.length; i += 8192) binary += String.fromCharCode(...bytes.subarray(i, i + 8192))
-    const path = await io.write(id, 'workflow.json', btoa(binary))
+    const path = await duringPreSubmitCreation('upload', () => io.write(id, 'workflow.json', btoa(binary)))
     workflowWritten = true
     checkAbort(input.signal)
     input.onProgress?.(0, '通过官方 ComfyUI MCP 提交...')
@@ -120,12 +132,11 @@ export async function runComfyWorkflow(input: {
     try {
       await input.onSubmitted?.({ taskId: submitted.prompt_id, pollUrl, pollKind: input.type })
     } finally {
-      await io.removeWorkflow(id)
-      workflowWritten = false
+      await cleanup()
     }
     return await resumeComfyWorkflow(pollUrl, submitted.prompt_id, input.type, input.onProgress, input.signal, io)
   } finally {
-    if (workflowWritten) await io.removeWorkflow(id)
+    await cleanup()
   }
 }
 
@@ -170,7 +181,8 @@ export async function resumeComfyWorkflow(pollUrl: string, taskId: string, type:
     const metadata = Array.isArray(result) ? result.find(v => v?.files) : result
     const file = metadata?.files?.find((f: any) => typeof f.path === 'string' && (type === 'video' ? /\.(mp4|webm|mov)$/i : /\.(png|jpe?g|webp)$/i).test(f.path))
     if (!file) throw new Error('官方 MCP 未返回对应媒体文件；任务与输出已保留')
-    const url = await io.read(file.path, type)
+    // Videos stay on disk; the task store copies them into the project natively.
+    const url = type === 'video' ? io.locate(file.path) : await io.read(file.path)
     return { url, type, taskId, pollUrl, pollKind: type }
   } catch (error) {
     if (signal?.aborted) {

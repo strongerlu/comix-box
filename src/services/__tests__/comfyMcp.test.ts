@@ -4,6 +4,7 @@ import { comfyMcpConfig, isComfyMcpServer, runComfyWorkflow, resumeComfyWorkflow
 import { Client } from '@modelcontextprotocol/sdk/client/index.js'
 import { callMcpTool, callMcpToolResult, connectMcpServer, disconnectMcpServer } from '../mcpClient'
 import { getMcpServerBridgeToolDefinitions } from '@/runtime/tools/mcpBridge'
+import { preSubmitCreationStage } from '@/runtime/creation/submissionSafety'
 
 test('official configuration preserves the target and rejects unsupported targets without downgrade', () => {
   assert.equal(comfyMcpConfig('http://127.0.0.1:8000').env?.COMFY_LOCAL_URL, 'http://127.0.0.1:8000')
@@ -34,6 +35,7 @@ function fixture() {
     },
     async write(_id, name) { writes.push(name); return `/private/${name}` },
     async read() { return 'data:image/png;base64,aGVsbG8=' },
+    locate: path => `http://asset.localhost/${encodeURIComponent(path)}`,
     async removeWorkflow() { writes.push('removed') },
   }
   return { io, calls, writes }
@@ -63,6 +65,28 @@ test('resume never submits again and refuses a changed target', async () => {
   await assert.rejects(resumeComfyWorkflow(recovery, 'job-1', 'image', undefined, undefined, { ...io, target: 'http://localhost:9999' }), /地址/)
 })
 
+test('temporary cleanup failure does not interrupt an accepted generation or trigger resubmission', async () => {
+  const { io, calls } = fixture()
+  io.removeWorkflow = async () => { throw new Error('cleanup denied') }
+  const result = await runComfyWorkflow({ type: 'image', buildWorkflow: () => ({}) }, io)
+  assert.equal(result.taskId, 'job-1')
+  assert.equal(calls.filter(([name]) => name === 'run_workflow').length, 1)
+  assert.equal(calls.filter(([name]) => name === 'fetch_outputs').length, 1)
+})
+
+test('failures before run_workflow are tagged as never submitted', async () => {
+  const invalid = fixture()
+  await assert.rejects(runComfyWorkflow({ type: 'video', buildWorkflow: () => { throw new Error('时长超出本地工作流范围') } }, invalid.io),
+    error => preSubmitCreationStage(error) === 'validation')
+  assert.equal(invalid.calls.some(([name]) => name === 'run_workflow'), false)
+
+  const unreadable = fixture()
+  unreadable.io.write = async () => { throw new Error('磁盘不可写') }
+  await assert.rejects(runComfyWorkflow({ type: 'image', references: ['data:image/png;base64,aA=='], buildWorkflow: () => ({}) }, unreadable.io),
+    error => preSubmitCreationStage(error) === 'upload')
+  assert.equal(unreadable.calls.some(([name]) => name === 'run_workflow'), false)
+})
+
 test('cancellation cancels the exact official task and never resubmits', async () => {
   const { io, calls } = fixture()
   const controller = new AbortController()
@@ -85,6 +109,16 @@ test('official text_outputs preserves a custom workflow CDN video result', async
   const result = await runComfyWorkflow({ type: 'video', buildWorkflow: () => ({}) }, io)
   assert.equal(result.url, 'https://cdn.example.test/result.mp4?token=test')
   assert.equal(calls.some(([name]) => name === 'fetch_outputs'), false)
+})
+
+test('local video outputs are returned as an asset URL instead of base64', async () => {
+  const { io, calls } = fixture()
+  const original = io.call
+  io.read = async () => { throw new Error('video must not be read as base64') }
+  io.call = async (name, args) => name === 'fetch_outputs' ? { files: [{ path: '/private/output/result.mp4' }] } : original(name, args)
+  const result = await runComfyWorkflow({ type: 'video', buildWorkflow: () => ({}) }, io)
+  assert.equal(result.url, `http://asset.localhost/${encodeURIComponent('/private/output/result.mp4')}`)
+  assert.equal(calls.filter(([name]) => name === 'run_workflow').length, 1)
 })
 
 test('upstream rejection and unknown status never cause a second submit; private workflow is removed', async () => {

@@ -197,13 +197,21 @@ test('Desktop dist rejects Python caches and prunes them recursively', () => {
       writeFileSync(join(cache, 'script.cpython-314.pyc'), 'bytecode')
       writeFileSync(join(dist, 'index.html'), '<!doctype html>')
 
-      const envName = 'DESKTOP_DIST_DIR'
-      const env = { ...process.env, [envName]: dist }
+      const harness = join(root, 'harness')
+      const bin = join(harness, 'node_modules/node/bin')
+      const env = { ...process.env, DESKTOP_DIST_DIR: dist, DESKTOP_HARNESS_DIR: harness }
       const audit = `scripts/audit-${target}-dist.mjs`
       const prune = `scripts/prune-${target}-dist.mjs`
-      assert.notEqual(spawnSync(process.execPath, [audit], { env }).status, 0)
+      const dirtyDist = spawnSync(process.execPath, [audit], { env, encoding: 'utf8' })
+      assert.equal(dirtyDist.status, 1)
+      assert.match(dirtyDist.stderr, /__pycache__ \(forbidden desktop artifact\)/)
       assert.equal(spawnSync(process.execPath, [prune], { env }).status, 0)
       assert.equal(existsSync(cache), false)
+      const missingRuntime = spawnSync(process.execPath, [audit], { env, encoding: 'utf8' })
+      assert.equal(missingRuntime.status, 1)
+      assert.match(missingRuntime.stderr, /Harness 运行时缺失/)
+      mkdirSync(bin, { recursive: true })
+      writeFileSync(join(bin, process.platform === 'win32' ? 'node.exe' : 'node'), '')
       assert.equal(spawnSync(process.execPath, [audit], { env }).status, 0)
     }
   } finally {

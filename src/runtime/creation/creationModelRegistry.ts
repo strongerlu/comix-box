@@ -18,6 +18,8 @@ import type {
 } from './creationMediaTypes'
 
 import { getRhEndpointCapability } from '@/data/rhCapabilities'
+import { computed } from 'vue'
+import { localComfyDurationStep, localComfyVideos } from './localComfyVideo'
 import { catalogModels, type CatalogChannel, type PluginCatalogModel } from './pluginCatalog'
 import { JC_H3_DIRECTOR_SIZE_OPTIONS, JC_H3_MODE_OPTIONS, JC_H3_RATIO_OPTIONS, JC_H3_RATIOS, JC_VIDEO_SIZE_OPTIONS, MEDIA_MODEL_CAPABILITIES } from '@/data/mediaModelCapabilities'
 
@@ -324,7 +326,6 @@ const FK_IMAGE_MODELS: Array<{
 ]
 const RH_IMAGE_RESOLUTIONS = ['1k', '2k', '4k']
 const VIDEO_RESOLUTIONS = ['480p', '720p', '1080p', 'native1080p', '2k', '4k']
-const VIDEO_RATIOS = ['2:3', '3:2', '1:1', '16:9', '9:16']
 
 // comfy-adapter 的 H3 用 length（帧）表达时长，秒数由适配器按 24fps 换算，节点自己再对齐到 17n+5。
 // 上限取 28 秒（28 → 672 帧，节点补到 685）：实测 30 秒的成片最后约 2 秒无效。
@@ -2773,10 +2774,35 @@ export function replaceCatalogVideoSpecs(channel: CatalogChannel, specs: Creatio
   CREATION_MODEL_REGISTRY.splice(0, CREATION_MODEL_REGISTRY.length, ...kept)
 }
 
+const localCreationModelSpecs = computed(() =>
+  localComfyVideos.value.map(profile => {
+    const step = localComfyDurationStep(profile)
+    const min = step === 1 ? Math.ceil(profile.minSeconds) : profile.minSeconds
+    const max = step === 1 ? Math.floor(profile.maxSeconds) : profile.maxSeconds
+    const fields: CreationFieldSpec[] = [
+      { key: 'prompt', label: '提示词', kind: 'prompt', required: true },
+      { key: 'duration', label: '时长（秒）', kind: 'number', defaultValue: min, min, max, step },
+    ]
+    for (const key of ['width', 'height', 'seed'] as const) {
+      const target = profile.bindings[key]
+      if (!target) continue
+      const [node, input] = target.split('.')
+      fields.push({ key, label: { width: '宽度（像素）', height: '高度（像素）', seed: '种子' }[key], kind: 'number', min: key === 'seed' ? 0 : 1, step: 1, defaultValue: Number(profile.workflow[node].inputs[input]) })
+    }
+    return baseSpec({ id: profile.id, label: profile.name, task: 'video', source: 'local-comfy', route: 'local-comfy', upstreamFamily: 'unknown', apiStyle: 'comfy-workflow-video', mode: 'text-to-video', contractStatus: 'partial', endpoint: 'mcp:run_workflow', fields,
+      duration: { min, max }, ratios: [], resolutions: [], notes: ['使用设置中保存的本地 API 工作流，通过官方 ComfyUI MCP 执行；节点和模型需已安装。'] })
+  }),
+)
+
+export function getAllCreationModelSpecs(): CreationModelSpec[] {
+  return [...CREATION_MODEL_REGISTRY, ...localCreationModelSpecs.value]
+}
+
 export function getCreationModelSpec(idOrModel: string): CreationModelSpec | undefined {
   const exact = CREATION_MODEL_REGISTRY.find(spec => spec.id === idOrModel)
+    ?? localCreationModelSpecs.value.find(spec => spec.id === idOrModel)
   if (exact) return exact
-  const matches = CREATION_MODEL_REGISTRY.filter(
+  const matches = getAllCreationModelSpecs().filter(
     spec => spec.model === idOrModel || spec.aliases?.includes(idOrModel),
   )
   if (matches.length > 1) {
@@ -2806,7 +2832,7 @@ export function defaultCreationModelId(task: CreationTask): string {
 }
 
 export function listCreationModels(filter: ListCreationModelsFilter = {}): CreationModelListItem[] {
-  return CREATION_MODEL_REGISTRY.filter(spec => !filter.task || spec.task === filter.task)
+  return getAllCreationModelSpecs().filter(spec => !filter.task || spec.task === filter.task)
     .filter(spec => !filter.mode || spec.mode === filter.mode)
     .filter(spec => !filter.source || filter.source === 'all' || spec.source === filter.source)
     .filter(spec => filter.includeDisabled || (spec.contractStatus !== 'broken' && !spec.hidden))
@@ -2845,7 +2871,7 @@ export function listCreationPanelModels(
     const sampleParams = buildPanelPreviewParams(spec)
     return {
       ...item,
-      label: displayModelLabel(spec.label),
+      label: displayModelLabel(spec.label, spec.id),
       apiStyle: spec.apiStyle,
       route: spec.route,
       fields: spec.fields,
@@ -2860,7 +2886,8 @@ const LABEL_OVERRIDES: Record<string, string> = {
   '全能视频 V3.1 Fast': 'Veo 3.1 Fast',
 }
 
-export function displayModelLabel(label: string): string {
+export function displayModelLabel(label: string, modelId = ''): string {
+  if (modelId.startsWith('local-comfy/user-')) return String(label || '').trim()
   const base = String(label || '')
     .split('·')[0]
     .trim()
@@ -2868,6 +2895,7 @@ export function displayModelLabel(label: string): string {
 }
 
 export function creationModelFamily(spec: Pick<CreationModelSpec, 'id' | 'model' | 'task' | 'group'>): string {
+  if (spec.id.startsWith('local-comfy/')) return '本地 ComfyUI'
   if (spec.group) return spec.group
   const id = `${spec.id} ${spec.model}`.toLowerCase()
   if (spec.id.startsWith('newapi/zx/seedance-')) return 'ZX · Seedance'

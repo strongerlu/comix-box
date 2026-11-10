@@ -1,5 +1,7 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
+import { localComfyVideos } from '../../runtime/creation/localComfyVideo'
+import type { CreationPlanSnapshot } from '@/stores/mediaTaskStore'
 
 import {
   addFiles,
@@ -8,17 +10,104 @@ import {
   cpState,
   currentRunPlan,
   aspectOptions,
+  applyPlanSnapshotParams,
+  beginPlanSnapshotPrefill,
+  canRegenerateCreationTask,
   genericModelFields,
   hasDuration,
   durationRange,
   resolutionOptions,
   sizeOptions,
   setModelFieldValue,
+  setDuration,
   setAspect,
   setResolution,
   switchModel,
   switchTask,
 } from '../useCreation'
+
+test('a local float workflow keeps the fractional duration selected in the panel', () => {
+  const previous = localComfyVideos.value
+  localComfyVideos.value = [{ id: 'local-comfy/user-float', name: 'Float duration', minSeconds: 4, maxSeconds: 5.5,
+    workflow: { '1': { class_type: 'TextEncode', inputs: { text: '' } }, '2': { class_type: 'PrimitiveFloat', inputs: { value: 4 } } },
+    bindings: { prompt: '1.text', duration: '2.value' } }]
+  try {
+    switchTask('video')
+    switchModel('local-comfy/user-float')
+    assert.deepEqual(durationRange.value, { min: 4, max: 5.5, step: 0.1, fixed: false })
+    setDuration(4.5)
+    assert.equal(buildCurrentCreationParams().duration, 4.5)
+  } finally {
+    localComfyVideos.value = previous
+  }
+})
+
+test('switching to a local workflow uses its dimensions and seed, while reselecting preserves edits', () => {
+  const previous = localComfyVideos.value
+  localComfyVideos.value = [{ id: 'local-comfy/user-dimensions', name: 'Local dimensions', minSeconds: 8, maxSeconds: 8,
+    workflow: { '1': { class_type: 'Video', inputs: { prompt: '', width: 1344, height: 768, seed: 42 } } },
+    bindings: { prompt: '1.prompt', width: '1.width', height: '1.height', seed: '1.seed' } }]
+  try {
+    switchTask('video')
+    switchModel('jc-minimax-h3-ref2v')
+    cpState.width = 512; cpState.height = 512; cpState.fieldValues.seed = 999
+    switchModel('local-comfy/user-dimensions')
+    assert.equal(buildCurrentCreationParams().width, 1344)
+    assert.equal(buildCurrentCreationParams().height, 768)
+    assert.equal(buildCurrentCreationParams().seed, 42)
+    cpState.width = 960
+    switchModel('local-comfy/user-dimensions')
+    assert.equal(buildCurrentCreationParams().width, 960)
+  } finally { localComfyVideos.value = previous }
+})
+
+test('only finished creation tasks with a plan snapshot can prefill the panel', () => {
+  const plan = { modelId: 'jc-minimax-h3-ref2v' } as CreationPlanSnapshot
+  for (const status of ['success', 'failed', 'cancelled'] as const) {
+    assert.equal(canRegenerateCreationTask({ source: 'creation', status, planSnapshot: plan }), true)
+  }
+  assert.equal(canRegenerateCreationTask({ source: 'creation', status: 'running', planSnapshot: plan }), false)
+  assert.equal(canRegenerateCreationTask({ source: 'chat', status: 'success', planSnapshot: plan }), false)
+  assert.equal(canRegenerateCreationTask({ source: 'creation', status: 'success' }), false)
+})
+
+test('a local workflow snapshot restores model, parameters and prompt without references', () => {
+  const previous = localComfyVideos.value
+  localComfyVideos.value = [{ id: 'local-comfy/user-prefill', name: 'Prefill', minSeconds: 4, maxSeconds: 10,
+    workflow: { '1': { class_type: 'Video', inputs: { prompt: '', width: 1344, height: 768, seed: 42, seconds: 4 } } },
+    bindings: { prompt: '1.prompt', width: '1.width', height: '1.height', seed: '1.seed', duration: '1.seconds' } }]
+  try {
+    switchTask('image')
+    addFiles([makeFile('stale.png', 'image/png')])
+    const plan = { modelId: 'local-comfy/user-prefill', task: 'video', apiStyle: 'comfy-workflow-video',
+      normalizedParams: { prompt: '旧提示词', duration: 8, width: 960, height: 540, seed: 7 } } as unknown as CreationPlanSnapshot
+    assert.equal(beginPlanSnapshotPrefill(plan), false)
+    assert.deepEqual(applyPlanSnapshotParams(plan, '旧提示词'), { hasReferences: false })
+    assert.equal(cpState.modelKey, 'local-comfy/user-prefill')
+    const params = buildCurrentCreationParams()
+    assert.equal(params.width, 960)
+    assert.equal(params.seed, 7)
+    assert.equal(params.duration, 8)
+    assert.equal(cpState.prompt, '旧提示词')
+    assert.equal(cpState.files.length, 0)
+
+    const withImage = { ...plan, normalizedParams: { ...plan.normalizedParams, images: ['https://cdn.example.test/a.png'] } }
+    beginPlanSnapshotPrefill(withImage)
+    assert.deepEqual(applyPlanSnapshotParams(withImage, '旧提示词'), { hasReferences: true })
+  } finally { localComfyVideos.value = previous }
+})
+
+test('an AI app snapshot restores the app identity before node fields', () => {
+  const plan = { modelId: 'rh-aiapp', task: 'video', apiStyle: 'rh-aiapp',
+    normalizedParams: { webappId: '1987', outputType: 'video', billingModel: 'rh-app', '12:text': '雨夜' } } as unknown as CreationPlanSnapshot
+  assert.equal(beginPlanSnapshotPrefill(plan), true)
+  assert.equal(cpState.task, 'ai-app')
+  assert.equal(cpState.aiAppWebappId, '1987')
+  assert.equal(cpState.aiAppOutputType, 'video')
+  assert.equal(cpState.aiAppBillingModel, 'rh-app')
+  applyPlanSnapshotParams(plan, '雨夜')
+  assert.equal(cpState.fieldValues['12:text'], '雨夜')
+})
 
 test('易红 Max 显示固定时长、720p 和运镜，切换后不沿用其他模型参数', () => {
   switchTask('video')

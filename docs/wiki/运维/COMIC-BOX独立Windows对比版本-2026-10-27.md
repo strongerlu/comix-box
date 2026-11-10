@@ -60,3 +60,11 @@ Gateway 完整登录测试还有一项既存下载页断言失败：旧中文安
 
 
 随后按用户要求更新为简约双格气泡 Logo，并在同一目录完成保留数据的更新安装与重启。同名构建产物的最新校验及图标验证见 [[运维/COMIC-BOX本地品牌与构建记录-2026-10-26]]。
+
+## 2026-11-10 Windows x64 安装包
+
+使用 `pnpm run tauri:build --bundles nsis --target x86_64-pc-windows-msvc` 从当前工作区构建优化版安装器。包含本地 ComfyUI 视频模型设置及 [[排障/COMIC-BOX缺陷排查清单-2026-11-09]] 所记录的修复。保留内部版本 2.3.1，以交付文件名的日期区分。
+
+- 交付文件为 `tmp/installers/COMIC-BOX_2.3.1_x64-setup_2026-11-10.exe`，共 91,726,837 字节，SHA-256 为 `DE385BA3EAFE631222A938E1E9F4A8B1CABBBEF547DB8B9D3FC57AAB4929E54C`。
+- 桌面快速构建和产物审计通过。7-Zip 校验 NSIS 内容通过，并核对包内主程序产品名、版本、x64 架构、Windows 清单，以及 Skill、创作 MCP、分镜模型和 Harness 运行时资源。
+- 安装器未签名。本次验证限于构建及包内容，未运行安装器或发布。

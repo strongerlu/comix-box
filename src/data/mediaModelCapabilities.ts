@@ -119,12 +119,9 @@ export const JC_H3_MODE_OPTIONS: MediaFieldOption[] = [
   { value: 1, label: '武戏' },
 ]
 const NANO_ASPECT_RATIOS = ['4:3', '3:4', '16:9', '9:16', '2:3', '3:2', '1:1', '4:5', '5:4', '21:9']
-const VIDEO_RATIOS = ['2:3', '3:2', '1:1', '16:9', '9:16']
 const VEO_RATIOS = ['16:9', '9:16']
 const SEEDANCE_2_RATIOS = ['adaptive', '16:9', '4:3', '1:1', '3:4', '9:16', '21:9']
 const SUNO_MV = ['chirp-fenix', 'chirp-crow', 'chirp-bluejay', 'chirp-auk-turbo', 'chirp-auk', 'chirp-v4', 'chirp-v3-5', 'chirp-v3.0']
-const LANGUAGES = ['自动', '中文', '英文', '日文', '韩文', '德文', '法文', '俄文', '葡萄牙文', '西班牙文', '意大利文']
-const RH_LANGUAGE_BOOSTS = ['auto', 'Chinese', 'Chinese,Yue', 'English', 'Japanese', 'Korean', 'Spanish', 'French', 'Portuguese', 'German', 'Arabic', 'Russian', 'Vietnamese', 'Indonesian', 'Italian', 'Thai']
 const runtimeAvailability = new Map<string, MediaModelAvailabilityOverride>()
 
 function options(values: Array<string | number | boolean>): MediaFieldOption[] {

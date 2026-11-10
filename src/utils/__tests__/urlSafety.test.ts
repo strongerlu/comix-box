@@ -3,7 +3,26 @@ import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { test } from 'node:test'
 
-import { isAllowedCreationResultUrl, isAllowedCreationPollUrl, isAllowedDownloadUrl, isAllowedExternalUrl, isAllowedMediaAttachmentUrl, isLocalAssetUrl, normalizeEditorLinkUrl } from '../urlSafety'
+import { comfyOutputPath, isAllowedCreationResultUrl, isAllowedCreationPollUrl, isAllowedDownloadUrl, isAllowedExternalUrl, isAllowedMediaAttachmentUrl, isLocalAssetUrl, normalizeEditorLinkUrl } from '../urlSafety'
+
+test('only ComfyUI private output media asset URLs are accepted as creation results', () => {
+  const output = 'C:\\Users\\me\\AppData\\Roaming\\com.comicbox.desktop\\comfy-mcp\\0b7e2d5a-1c3f-4e8a-9b6d-2f4a6c8e0a1b\\outputs\\result.mp4'
+  const url = `http://asset.localhost/${encodeURIComponent(output)}`
+  assert.equal(comfyOutputPath(url), output)
+  assert.equal(isAllowedCreationResultUrl(url), true)
+  for (const path of [
+    'C:\\Users\\me\\Documents\\secret.mp4',
+    'C:\\Users\\me\\AppData\\Roaming\\com.comicbox.desktop\\comfy-mcp\\not-a-uuid\\outputs\\result.mp4',
+    'C:\\Users\\me\\AppData\\Roaming\\com.comicbox.desktop\\comfy-mcp\\0b7e2d5a-1c3f-4e8a-9b6d-2f4a6c8e0a1b\\workflow.json',
+    'C:\\Users\\me\\AppData\\Roaming\\com.comicbox.desktop\\comfy-mcp\\0b7e2d5a-1c3f-4e8a-9b6d-2f4a6c8e0a1b\\outputs\\notes.txt',
+    'C:\\Users\\me\\AppData\\Roaming\\com.comicbox.desktop\\comfy-mcp\\0b7e2d5a-1c3f-4e8a-9b6d-2f4a6c8e0a1b\\outputs\\..\\..\\..\\secret.mp4',
+  ]) {
+    const other = `http://asset.localhost/${encodeURIComponent(path)}`
+    assert.equal(comfyOutputPath(other), undefined, path)
+    assert.equal(isAllowedCreationResultUrl(other), false, path)
+  }
+  assert.equal(comfyOutputPath(`https://example.test/${encodeURIComponent(output)}`), undefined)
+})
 
 test('isLocalAssetUrl 认全 Tauri 本地资源的两种形态', () => {
   // macOS: convertFileSrc 给 asset://localhost/...；Windows: http(s)://asset.localhost/...

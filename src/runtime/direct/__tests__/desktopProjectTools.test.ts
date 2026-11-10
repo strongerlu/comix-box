@@ -5,7 +5,6 @@ import {
   buildCreativeToolDefinitions,
   buildMemoryDesktopToolDefinitions,
   CREATIVE_PROJECT_TOOL_DEFINITIONS,
-  parseCreativeToolArguments,
 } from '../creativeToolContract'
 import { createDesktopProjectToolExecutor } from '../desktopProjectTools'
 

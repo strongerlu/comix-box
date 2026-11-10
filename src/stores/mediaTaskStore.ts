@@ -14,7 +14,7 @@ import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
 import { getItem, initDB, setItem } from '@/utils/idb'
 import { usesNewApiContentEndpoint } from '@/runtime/creation/creationMediaPlan'
-import { isUncertainSubmission, UNCERTAIN_SUBMISSION, type CreationRequestIdentity } from '@/runtime/creation/submissionSafety'
+import { isUncertainSubmission, preSubmitCreationStage, UNCERTAIN_SUBMISSION, type CreationRequestIdentity } from '@/runtime/creation/submissionSafety'
 import { getCreationModelSpec } from '@/runtime/creation/creationModelRegistry'
 import {
   CREATION_REFRESH_POLL_INTERVAL_MS,
@@ -34,9 +34,9 @@ import type {
   MediaResult,
 } from '@/api/media-generation'
 import { emitEvent, emitEventAsync } from '@/utils/eventBus'
-import { isAllowedCreationResultUrl, isPublicUpstreamResultUrl } from '@/utils/urlSafety'
+import { comfyOutputPath, isAllowedCreationResultUrl, isPublicUpstreamResultUrl } from '@/utils/urlSafety'
 import { writeMediaAsset } from '@/utils/mediaFileWriter'
-import { downloadProjectMedia, writeProjectMedia } from '@/utils/projectMediaWriter'
+import { copyComfyOutputToProject, downloadProjectMedia, writeProjectMedia } from '@/utils/projectMediaWriter'
 import { isTauriMobileRuntime, isTauriRuntime } from '@/utils/tauriEnv'
 import { useProjectStore } from '@/stores/projectStore'
 import { validateMediaModelInputs } from '@/data/mediaModelInputValidation'
@@ -55,7 +55,7 @@ import { executeDynamicCreation, prepareDynamicInputs, cancelDynamicCreation, Cr
 import type { CreationRunPlan } from '@/runtime/creation/creationMediaTypes'
 import { writeCanvasTaskResult } from '@/components/canvas/canvasPersistence'
 import type { CanvasTaskTarget } from '@/types/canvas'
-import { resumeComfyWorkflow } from '@/services/comfyMcp'
+import { comfyOutputMime, readComfyOutputBase64, resumeComfyWorkflow } from '@/services/comfyMcp'
 
 async function pollTask(...args: Parameters<typeof pollApiTask>): Promise<string> {
   const [url, kind, onProgress, , , signal] = args
@@ -155,6 +155,7 @@ export interface CreationTaskError {
 }
 
 export interface CreationPlanSnapshot {
+  localWorkflow?: CreationRunPlan['localWorkflow']
   protocol?: CreationRunPlan['protocol']
   modelId: string
   model: string
@@ -261,10 +262,6 @@ function canvasTaskOwner(task: MediaTask): string | undefined {
 
 function isTaskCancelled(task: MediaTask): boolean {
   return task.status === 'cancelled' || task.downloadState === 'paused'
-}
-
-function isTaskSuccessful(task: MediaTask): boolean {
-  return task.status === 'success'
 }
 
 function abortTaskExecution<T>(promise: Promise<T>, signal: AbortSignal): Promise<T> {
@@ -386,6 +383,7 @@ export function __setMediaTaskSaverForTests(saver: typeof saveTasks | null) {
 
 function toPlanSnapshot(plan: CreationRunPlan): CreationPlanSnapshot {
   return {
+    localWorkflow: plan.localWorkflow ? JSON.parse(JSON.stringify(plan.localWorkflow)) : undefined,
     protocol: plan.protocol,
     modelId: plan.modelId,
     model: plan.model,
@@ -423,19 +421,22 @@ function buildTaskError(
 function classifyExecutionError(task: MediaTask, error: unknown): CreationTaskError {
   const message = error instanceof Error ? error.message : String(error || '未知错误')
   const plan = task.planSnapshot
+  const preSubmitStage = preSubmitCreationStage(error)
+  if (preSubmitStage === 'validation') {
+    return { category: 'plan-validation', stage: 'validation', message: message.slice(0, 200), raw: error }
+  }
+  if (preSubmitStage === 'upload') {
+    return { category: 'upload', stage: 'upload', message: message.slice(0, 200), raw: error }
+  }
   if (/IndexedDB|localStorage|persist|写入失败|transaction|storage/i.test(message)) {
     return { category: 'persistence', stage: 'submit', message: message.slice(0, 200), raw: error }
   }
+  // Untagged text only suggests a category; it cannot prove the request was never sent.
   if (/校验|缺少必填|不支持|不能小于|不能大于|必须是/.test(message)) {
-    return {
-      category: 'plan-validation',
-      stage: 'validation',
-      message: message.slice(0, 200),
-      raw: error,
-    }
+    return { category: 'plan-validation', stage: 'submit', message: message.slice(0, 200), raw: error }
   }
   if (/上传失败|无法加载参考图片|素材上传/.test(message)) {
-    return { category: 'upload', stage: 'upload', message: message.slice(0, 200), raw: error }
+    return { category: 'upload', stage: 'submit', message: message.slice(0, 200), raw: error }
   }
   if (/HTTP 4|HTTP 5|NewAPI|服务暂时不可用|请求过于频繁/.test(message)) {
     return { category: 'newapi', stage: 'submit', message: message.slice(0, 200), raw: error }
@@ -798,8 +799,18 @@ export const useMediaTaskStore = defineStore('mediaTasks', () => {
         : kind === 'audio' ? 'audio/mpeg'
           : kind === 'model3d' ? 'model/gltf-binary'
             : kind === 'text' ? 'text/plain' : kind === 'file' ? 'application/octet-stream' : 'image/png')
+      const comfyOutput = comfyOutputPath(downloadUrl)
       if (projectDir && !dataUri) {
-        const { filePath, projectPath } = await downloadProjectMedia({
+        const { filePath, projectPath } = comfyOutput && (kind === 'image' || kind === 'video') ? await copyComfyOutputToProject({
+          path: comfyOutput,
+          projectDir,
+          mime: comfyOutputMime(comfyOutput),
+          kind,
+          summary: task.summary,
+          prompt: task.prompt || task.modelLabel || '',
+          taskId: task.id,
+          memory: true,
+        }) : await downloadProjectMedia({
           url: downloadUrl,
           headers: creationResultRequestHeaders(downloadUrl),
           timeoutSecs: 300,
@@ -834,7 +845,10 @@ export const useMediaTaskStore = defineStore('mediaTasks', () => {
       }
       let dataBase64 = dataUri?.[2] || ''
       let contentType = dataUri?.[1] || ''
-      if (!dataUri) {
+      if (comfyOutput) {
+        dataBase64 = await readComfyOutputBase64(comfyOutput)
+        contentType = comfyOutputMime(comfyOutput)
+      } else if (!dataUri) {
         // 使用 https_download_base64（与 creationMediaCache 同通道，已验证 CDN 兼容）
         const dl = await downloadCreationMediaBase64(downloadUrl, task.downloadCredentialRef, taskAbortControllers.get(task.id)?.signal)
         if (dl.status < 200 || dl.status >= 300) throw new Error(`HTTP 下载失败: ${dl.status}`)

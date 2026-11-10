@@ -2813,9 +2813,12 @@ mod tests {
             assert!(std::time::Instant::now() < deadline, "writer did not stage its replacement");
             std::thread::sleep(std::time::Duration::from_millis(1));
         }
+        // Holding the reader until the writer returns keeps every replace attempt blocked,
+        // so only the post-retry revision check can decide the result.
+        std::thread::sleep(std::time::Duration::from_millis(50));
         std::fs::write(&path, "external change during retry").unwrap();
-        drop(handle);
         let result = writer.join().unwrap().unwrap();
+        drop(handle);
         assert_eq!(result.status, "conflict");
         assert_eq!(std::fs::read_to_string(&path).unwrap(), "external change during retry");
         assert_eq!(std::fs::read_dir(temp.path()).unwrap().count(), 1);

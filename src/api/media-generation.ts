@@ -1,5 +1,6 @@
 import { validateCreationR2Grant, assertNoLegacyCreationOssReference } from '@/utils/creationR2Upload'
 import { isTauriRuntime } from '@/utils/tauriEnv'
+import { duringPreSubmitCreation, preSubmitCreationError } from '@/runtime/creation/submissionSafety'
 /**
  * api/media-generation.ts — 云端媒体生成（统一走 NewAPI）
  *
@@ -384,32 +385,6 @@ function buildRhVideoTaskPollUrl(taskId: string, data: any): string {
     : buildRhTaskPollUrl(taskId, data)
 }
 
-/**
- * 从 NewAPI 响应中尝试提取 RH 原始数字 task_id。
- * NewAPI 包装 ID 为 task_xxx 时，原始 RH ID 可能藏在 data/task_id 等字段中。
- */
-function extractRawRhTaskId(data: any): string | null {
-  if (!data || typeof data !== 'object') return null
-  // 遍历常见嵌套路径，找纯数字 task_id
-  const candidates = [
-    data?.data?.task_id,
-    data?.data?.taskId,
-    data?.data?.id,
-    data?.task_id,
-    data?.taskId,
-    data?.id,
-    data?.result?.task_id,
-    data?.result?.taskId,
-    data?.result?.id,
-  ]
-  for (const c of candidates) {
-    const s = String(c || '').trim()
-    // RH 原始 ID 是纯数字（如 2067959789841170434），不是 task_xxx 格式
-    if (/^\d{10,30}$/.test(s)) return s
-  }
-  return null
-}
-
 function buildOfficialRhAiAppVideoNodeInfoList(_params: VideoGenParams, _images: string[]): any[] | undefined {
   return undefined
 }
@@ -445,7 +420,11 @@ export function isTerminalCreationTaskError(error: unknown): boolean {
   )
 }
 
-export async function uploadCreationAsset(value?: string, externalSignal?: AbortSignal): Promise<string> {
+export function uploadCreationAsset(value?: string, externalSignal?: AbortSignal): Promise<string> {
+  return duringPreSubmitCreation('upload', () => uploadCreationAssetSource(value, externalSignal))
+}
+
+async function uploadCreationAssetSource(value?: string, externalSignal?: AbortSignal): Promise<string> {
   const source = String(value || '').trim()
   if (!source) return source
   assertNoLegacyCreationOssReference(source)
@@ -973,7 +952,7 @@ export async function generateImage(
         blobs.push(dataUrlToBlob(item))
       } else {
         try { const imgRes = await safeFetch(item, { signal: params.signal }); blobs.push(await imgRes.blob()) }
-        catch { throwIfAborted(params.signal); throw new Error('无法加载参考图片') }
+        catch { throwIfAborted(params.signal); throw preSubmitCreationError('upload', '无法加载参考图片') }
       }
     }
     fields.image = blobs
@@ -1093,10 +1072,10 @@ export async function generateVideo(
       const source = safeImages[0]
       const image = source.startsWith('data:')
         ? dataUrlToBlob(source)
-        : await safeFetch(source, { signal: params.signal }).then(response => {
+        : await duringPreSubmitCreation('upload', () => safeFetch(source, { signal: params.signal }).then(response => {
             if (!response.ok) throw new Error('无法加载参考图片')
             return response.blob()
-          })
+          }))
       data = await apiCallMultipart('/v1/videos', {
         model: upstreamModel,
         prompt,

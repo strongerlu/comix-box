@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "typecheck": "vue-tsc -b",
+    "typecheck": "pnpm run build:deepseek-harness && vue-tsc -b",
     "build": "pnpm run build:desktop",
     "build:desktop": "node scripts/build-skills-index.mjs && pnpm run test:focused && node scripts/bundle-icons.mjs && vue-tsc -b && vite build && node scripts/prune-desktop-dist.mjs && pnpm run audit:desktop-dist",
     "build:desktop:quick": "node scripts/build-skills-index.mjs && pnpm run build:deepseek-harness && pnpm run build:creation-mcp && node scripts/bundle-icons.mjs && vue-tsc -b && vite build && node scripts/prune-desktop-dist.mjs && pnpm run audit:desktop-dist",
@@ -28,8 +28,9 @@
     "lint:fix": "oxlint --fix",
     "format": "oxfmt --check",
     "format:fix": "oxfmt",
-    "check": "pnpm run format && pnpm run lint && pnpm exec vue-tsc -b",
-    "check:fix": "pnpm run format:fix && pnpm run lint:fix && pnpm exec vue-tsc -b"
+    "verify": "pnpm run lint && pnpm run typecheck && pnpm run test:focused",
+    "check": "pnpm run format && pnpm run lint && pnpm run typecheck",
+    "check:fix": "pnpm run format:fix && pnpm run lint:fix && pnpm run typecheck"
   },
   "dependencies": {
     "@iconify/vue": "^5.0.1",

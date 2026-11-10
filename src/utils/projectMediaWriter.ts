@@ -102,6 +102,22 @@ export async function downloadProjectMedia(opts: {
   }
 }
 
+export async function copyComfyOutputToProject(opts: {
+  path: string
+  projectDir: string
+  mime: string
+  kind: 'image' | 'video'
+  summary?: string
+  prompt?: string
+  taskId?: string
+  memory?: boolean
+}): Promise<WriteProjectMediaResult> {
+  const projectPath = buildProjectMediaPath(opts)
+  const { invoke } = await import('@tauri-apps/api/core')
+  await invoke('comfy_mcp_copy_output_to_project', { path: opts.path, root: opts.projectDir, relativePath: projectPath })
+  return { filePath: `${opts.projectDir.replace(/[\\/]+$/, '')}/${projectPath}`, projectPath }
+}
+
 function base64ToBytes(value: string): Uint8Array {
   const binary = atob(value)
   const data = new Uint8Array(binary.length)

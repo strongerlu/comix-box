@@ -1,4 +1,5 @@
 import { assertNoLegacyCreationOssReference } from '@/utils/creationR2Upload'
+import { buildLocalComfyVideo } from './localComfyVideo'
 import {
   CREATION_VIDEO_POLL_INTERVAL_MS,
   CREATION_VIDEO_POLL_MAX_SEC,
@@ -23,6 +24,7 @@ import zImageWorkflow from './workflows/z-image-turbo.json'
 import grokWorkflow from './workflows/grok-video.json'
 import { canonicalCreationRatio, usesNewApiContentEndpoint } from './creationMediaPlan'
 import { detectImageMimeFromBytes } from '@/utils/imageContracts'
+import { duringPreSubmitCreation } from './submissionSafety'
 
 export interface CreationSubmitRequest {
   runtime: 'newapi-direct' | 'runninghub-adapter' | 'local-comfy'
@@ -45,23 +47,6 @@ function creationAbortError(): Error {
 
 function throwIfCreationAborted(signal?: AbortSignal): void {
   if (signal?.aborted) throw creationAbortError()
-}
-
-function waitForCreationPoll(ms: number, signal?: AbortSignal): Promise<void> {
-  throwIfCreationAborted(signal)
-  return new Promise((resolve, reject) => {
-    const timer = setTimeout(done, ms)
-    const onAbort = () => {
-      clearTimeout(timer)
-      signal?.removeEventListener('abort', onAbort)
-      reject(creationAbortError())
-    }
-    function done() {
-      signal?.removeEventListener('abort', onAbort)
-      resolve()
-    }
-    signal?.addEventListener('abort', onAbort, { once: true })
-  })
 }
 
 export function buildCreationSubmitRequest(plan: CreationRunPlan): CreationSubmitRequest {
@@ -304,6 +289,11 @@ async function executeLocalComfyRequest(
   onSubmitted?: (submitted: { taskId: string; pollUrl: string; pollKind: 'image' | 'video' | 'audio' | 'text' }) => void | Promise<void>,
 ): Promise<MediaResult> {
   const params = request.plan.debug.normalizedParams
+  if (request.plan.apiStyle === 'comfy-workflow-video') {
+    if (!request.plan.localWorkflow) throw new Error('缺少提交时的本地工作流快照，请重新选择模型')
+    return runComfyWorkflow({ type: 'video', signal: request.signal, onProgress, onSubmitted,
+      buildWorkflow: () => buildLocalComfyVideo(request.plan.localWorkflow!, params) })
+  }
   if (request.plan.apiStyle === 'comfy-grok-video') {
     const images = asStringArray(params.images)
     if (!images.length || images.length > GROK_REFERENCE_NODE_IDS.length) throw new Error('请选择 1 至 7 张参考图')
@@ -474,7 +464,11 @@ async function executeDirectImageRequest(
   return { url, type: 'image', taskId, pollUrl, pollKind: 'image' }
 }
 
-async function imageReferenceToBlob(source: string, signal?: AbortSignal): Promise<Blob> {
+function imageReferenceToBlob(source: string, signal?: AbortSignal): Promise<Blob> {
+  return duringPreSubmitCreation('upload', () => readImageReference(source, signal))
+}
+
+async function readImageReference(source: string, signal?: AbortSignal): Promise<Blob> {
   throwIfCreationAborted(signal)
   if (source.startsWith('data:')) return dataUrlToBlob(source)
   const response = await fetch(source, { signal })
@@ -1117,13 +1111,6 @@ function compactNodeInfoList(list: Array<Record<string, string> | undefined>): A
 function stringifyValue(value: unknown): string | undefined {
   if (value === undefined || value === null || value === '') return undefined
   return String(value)
-}
-
-async function toBlob(value: string): Promise<Blob> {
-  if (value.startsWith('data:')) return dataUrlToBlob(value)
-  const res = await fetch(value)
-  if (!res.ok) throw new Error('无法加载参考图片')
-  return await res.blob()
 }
 
 function dataUrlToBlob(dataUrl: string): Blob {

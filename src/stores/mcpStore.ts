@@ -1,6 +1,6 @@
 import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
-import { getItem, setItem, removeItem } from '@/utils/idb'
+import { getItem, setItem, removeItem, initDB } from '@/utils/idb'
 
 // ─── Types ───────────────────────────────────────────
 
@@ -72,20 +72,32 @@ function saveServers(servers: McpServerConfig[]) {
   return setItem(STORAGE_KEY, JSON.stringify(servers))
 }
 
+let initializeStorage = initDB
+let readServers = loadServers
+export function __setMcpStorageForTests(storage: { initialize: () => Promise<void>; load: () => Promise<McpServerConfig[]> } | null) {
+  initializeStorage = storage?.initialize || initDB
+  readServers = storage?.load || loadServers
+}
+
 // ─── Store ───────────────────────────────────────────
 
 export const useMcpStore = defineStore('mcp', () => {
   const servers = ref<McpServerConfig[]>([])
   const tools = ref<Map<string, McpToolSchema[]>>(new Map())
   const loaded = ref(false)
+  let loading: Promise<void> | undefined
 
   // Lazy init
   async function ensureLoaded() {
     if (loaded.value) return
-    servers.value = await loadServers()
-    loaded.value = true
+    if (!loading) loading = (async () => {
+      await initializeStorage()
+      servers.value = await readServers()
+      loaded.value = true
+    })().finally(() => { loading = undefined })
+    return loading
   }
-  ensureLoaded()
+  void ensureLoaded().catch(error => console.error('[MCP] 读取连接失败', error))
 
   // ─── Computed ──────────────────────────────────────
 

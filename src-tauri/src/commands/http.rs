@@ -1041,6 +1041,8 @@ mod tests {
                 while std::time::Instant::now() < deadline {
                     match listener.accept() {
                         Ok((mut stream, _)) => {
+                            // Windows accepted sockets inherit the listener's non-blocking mode.
+                            stream.set_nonblocking(false).unwrap();
                             stream.set_read_timeout(Some(std::time::Duration::from_secs(1))).unwrap();
                             let mut request = [0_u8; 1024];
                             let _ = stream.read(&mut request);

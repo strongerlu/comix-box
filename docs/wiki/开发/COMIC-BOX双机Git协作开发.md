@@ -73,7 +73,9 @@ pnpm run tauri:dev
 node --test scripts/__tests__/git-collaboration.test.mjs
 ```
 
-需要完整验证时：
+提交前的统一入口是 `pnpm run verify`：依次执行 lint、typecheck、focused 构建与运行、Rust 测试，任一步失败即停。GitHub 上推送 `main` 或提交拉取请求时，`.github/workflows/verify.yml` 在 Windows runner 上执行同一命令。
+
+需要分步排查时：
 
 ```powershell
 pnpm run test:focused:build
@@ -82,7 +84,7 @@ pnpm run test:tauri
 pnpm run build:desktop:quick
 ```
 
-也可以用 `pnpm run test:focused` 顺序执行 focused 构建、运行和 Rust 测试。`build:desktop:quick` 准备桌面资源并验证前端分发，不等于 Windows 原生测试或安装包发布；`tauri:dev` 会编译启动原生窗口。此次整理前，本机完整 Rust 测试宿主存在 `0xc0000139` 的已记录阻断；换机后应重新验证，不能算作通过。实际平台、真实生成和未执行的检查按事实记录。
+也可以用 `pnpm run test:focused` 顺序执行 focused 构建、运行和 Rust 测试。`typecheck` 和 focused 入口会先准备锁定版本的 Harness。若单独执行 Harness 集成测试，请先执行 `pnpm run build:deepseek-harness`。部分集成测试需要 Windows 符号链接、用户凭据管理器及子进程权限。原 Rust 测试宿主的 `0xc0000139` 启动问题已在 2026-11-09 修复，见 [[排障/COMIC-BOX缺陷排查清单-2026-11-09]]。`build:desktop:quick` 验证前端分发，`tauri:dev` 编译并启动原生窗口。
 
 ## 素材、应用配置与绝对路径迁移
 

@@ -1,4 +1,4 @@
-import { spawn } from 'node:child_process'
+import { execFileSync, spawn } from 'node:child_process'
 import { existsSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -9,6 +9,8 @@ import { build } from 'esbuild'
 const outdir = join(tmpdir(), 'jc-focused-tests')
 
 const wave1FocusedTests = [
+  'src/stores/__tests__/mcpStore.test.ts',
+  'src/runtime/creation/__tests__/localComfyVideo.test.ts',
   'src/composables/__tests__/useReviewPromptEditor.test.ts',
   'src/services/__tests__/comfyMcp.test.ts',
   'src/utils/__tests__/comfyWorkflowCredential.test.ts',
@@ -298,6 +300,9 @@ async function runFocusedTests() {
 }
 
 const command = process.argv[2]
+if (command === 'build' || command === 'run') {
+  execFileSync(process.execPath, ['scripts/prepare-deepseek-harness.mjs'], { stdio: 'inherit' })
+}
 if (command === 'build') {
   await buildFocusedTests()
 } else if (command === 'run') {

@@ -127,7 +127,8 @@ if (failures.length > 0) {
 // 结果是「开发态正常、装出来的包一开口就报 无法启动 MCP 进程: os error 2」。这里宁可
 // 构建失败，也不让这种包再发出去。
 const harnessNode = resolve(
-  'src-tauri/resources/deepseek-harness/node_modules/node/bin',
+  process.env.DESKTOP_HARNESS_DIR || 'src-tauri/resources/deepseek-harness',
+  'node_modules/node/bin',
   process.platform === 'win32' ? 'node.exe' : 'node',
 )
 if (!existsSync(harnessNode)) {

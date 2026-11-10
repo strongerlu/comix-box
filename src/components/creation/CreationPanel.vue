@@ -95,6 +95,9 @@ import {
   isModelFieldOptionSelected,
   refreshCreationModelAvailability,
   saveCpState,
+  canRegenerateCreationTask,
+  beginPlanSnapshotPrefill,
+  applyPlanSnapshotParams,
   getVisibleCreationTasks,
   buildCurrentCreationParams,
   SEED_AUDIO_MAX_REFERENCE_BYTES,
@@ -291,70 +294,18 @@ function canPersistMediaResult(task: MediaTask): boolean {
 }
 
 function canRegenerateTask(task: MediaTask): boolean {
-  return (
-    task.source === 'creation' &&
-    (task.status === 'success' || task.status === 'failed' || task.status === 'cancelled') &&
-    Boolean(task.planSnapshot)
-  )
+  return canRegenerateCreationTask(task)
 }
 
 async function regenerateTask(task: MediaTask) {
   const plan = task.planSnapshot
   if (!plan || !canRegenerateTask(task)) return
-  const isAiApp = plan.apiStyle === 'rh-aiapp'
-  switchTask(isAiApp ? 'ai-app' : plan.task)
-  switchModel(plan.modelId)
-  cpState.fieldValues = {}
-  const params = plan.normalizedParams
-  const scalar = (key: string) => params[key]
-  if (isAiApp) {
-    cpState.aiAppWebappId = typeof scalar('webappId') === 'string' ? String(scalar('webappId')) : ''
-    const outputType = scalar('outputType')
-    cpState.aiAppOutputType = outputType === 'image' || outputType === 'audio' || outputType === 'video'
-      ? outputType
-      : plan.task === 'image' || plan.task === 'audio' || plan.task === 'video' ? plan.task : ''
-    cpState.aiAppBillingModel = typeof scalar('billingModel') === 'string' ? String(scalar('billingModel')) : ''
-    cpState.aiAppLabel = ''
-    cpState.aiAppFields = []
-    await handleDiscoverAiApp()
-  }
-  const ratio = scalar('ratio') ?? scalar('aspectRatio') ?? scalar('aspect_ratio')
-  const resolution = scalar('resolution')
-  const duration = scalar('duration')
-  if (typeof ratio === 'string') setAspect(ratio)
-  if (typeof resolution === 'string') setResolution(resolution)
-  if (typeof duration === 'number') setDuration(duration)
-  for (const [key, stateKey] of Object.entries({
-    title: 'title', tags: 'tags', negative_tags: 'negativeTags', text: 'text', ref_text: 'refText',
-    voice_prompt: 'voicePrompt', language: 'language', start_time: 'startTime', end_time: 'endTime',
-    width: 'width', height: 'height', value: 'value', size: 'size', mv: 'mv',
-  })) {
-    const value = scalar(key)
-    if (value !== undefined) (cpState as unknown as Record<string, unknown>)[stateKey] = value
-  }
-  for (const field of currentCreationSpec.value?.fields || []) {
-    const value = scalar(field.key)
-    if (value !== undefined && ['string', 'number', 'boolean'].includes(typeof value)) {
-      cpState.fieldValues[field.key] = value as string | number | boolean
-    }
-  }
-  if (isAiApp) {
-    for (const [key, value] of Object.entries(params)) {
-      if (key.includes(':') && value !== undefined && value !== null && value !== '' && ['string', 'number', 'boolean'].includes(typeof value)) {
-        cpState.fieldValues[key] = value as string | number | boolean
-      }
-    }
-  }
+  if (beginPlanSnapshotPrefill(plan)) await handleDiscoverAiApp()
+  const { hasReferences } = applyPlanSnapshotParams(plan, task.prompt)
   mediaTaskSummary = task.summary ? { value: task.summary, prompt: task.prompt } : null
-  cpState.prompt = task.prompt
-  cpState.files = []
   cancelCanvasSelection()
   saveCpState()
   showTaskHistory.value = false
-  const hasReferences = ['images', 'image', 'videos', 'video', 'audios', 'audio'].some(key => {
-    const value = scalar(key)
-    return Array.isArray(value) ? value.length > 0 : Boolean(value)
-  })
   cpState.progressText = hasReferences
     ? '参数已回填，请重新选择参考素材后发送'
     : '参数已回填，可确认后发送'
@@ -1262,7 +1213,7 @@ async function copyCreationParams() {
   }
   const text = buildMediaParamsText({
     kind: kind as 'image' | 'video' | 'audio' | 'model3d',
-    modelLabel: displayModelLabel(spec.label),
+    modelLabel: displayModelLabel(spec.label, spec.id),
     mode: canvasReferenceRunPlan.value?.mode || currentRunPlan.value?.mode || spec.mode,
     ...(aspectOptions.value.length ? { ratio: cpState.ar } : {}),
     ...(resolutionOptions.value.length ? { resolution: cpState.res } : {}),
@@ -4070,9 +4021,10 @@ function commitDurationInput(event: Event) {
   const range = durationRange.value
   const value = input.valueAsNumber
   if (range && Number.isFinite(value)) {
-    setDuration(Math.max(Math.ceil(range.min), Math.min(Math.floor(range.max), Math.round(value))))
+    const duration = range.step === 1 ? Math.round(value) : value
+    setDuration(Math.max(range.min, Math.min(range.max, duration)))
   }
-  input.value = String(Math.round(cpState.dur))
+  input.value = String(cpState.dur)
 }
 
 const openPop = ref<string>('')
@@ -4151,7 +4103,7 @@ const modelList = computed(() =>
     const spec = getCreationModelSpec(key)
     return spec ? [{
       key,
-      label: creationModelDisplayLabel(displayModelLabel(spec.label)),
+      label: creationModelDisplayLabel(displayModelLabel(spec.label, spec.id)),
       rawLabel: spec.label,
       family: creationModelFamily(spec),
       price: displayModelPrice(spec),
@@ -4832,7 +4784,7 @@ const canSend = computed(
       <div class="cp-island cp-island-selector" role="button" tabindex="0" @keydown.enter.self.prevent="togglePop('model')" @keydown.space.self.prevent="togglePop('model')" @click="togglePop('model')">
         <div class="cp-island-label">模型</div>
         <div class="cp-island-val" :title="currentModel?.label || cpState.modelKey">
-          {{ creationModelDisplayLabel(displayModelLabel(currentModel?.label || cpState.modelKey)) }}
+          {{ creationModelDisplayLabel(displayModelLabel(currentModel?.label || cpState.modelKey, cpState.modelKey)) }}
           <small v-if="isFkSeedanceModel && currentModelAvailability" class="cp-model-status" :title="currentModelAvailability.reason">
             {{ currentModelAvailability.status === 'disabled' ? '已停用' : currentModelAvailability.status === 'degraded' ? (currentModelAvailability.reason || '受限') : '可用' }}
           </small>
@@ -4963,7 +4915,7 @@ const canSend = computed(
       <div v-if="hasDuration && durationRange" class="cp-island cp-island-grow">
         <div class="cp-island-label">时长</div>
         <div v-if="durationRange.fixed" class="cp-island-val">{{ durationRange.min }}s（固定）</div>
-        <div v-else-if="durationOptions.length <= 3" class="cp-btn-group">
+        <div v-else-if="currentCreationSpec?.apiStyle !== 'comfy-workflow-video' && durationOptions.length <= 3" class="cp-btn-group">
           <button
             v-for="d in durationOptions"
             :key="d"
@@ -4978,20 +4930,20 @@ const canSend = computed(
           <input
             type="range"
             class="cp-dur-slider"
-            :min="Math.ceil(durationRange.min)"
-            :max="Math.floor(durationRange.max)"
-            :step="Math.max(1, durationRange.step)"
-            :value="Math.round(cpState.dur)"
-            @input="setDuration(Math.round(+($event.target as HTMLInputElement).value))"
+            :min="durationRange.min"
+            :max="durationRange.max"
+            :step="durationRange.step"
+            :value="cpState.dur"
+            @input="setDuration(+($event.target as HTMLInputElement).value)"
           />
           <input
             type="number"
             class="cp-dur-val"
             aria-label="时长（秒）"
-            :min="Math.ceil(durationRange.min)"
-            :max="Math.floor(durationRange.max)"
-            :step="Math.max(1, durationRange.step)"
-            :value="Math.round(cpState.dur)"
+            :min="durationRange.min"
+            :max="durationRange.max"
+            :step="durationRange.step"
+            :value="cpState.dur"
             @change="commitDurationInput($event)"
             @keydown.enter="($event.target as HTMLInputElement).blur()"
           />

@@ -29,7 +29,8 @@ test('创作面板保留任务记录入口并显示正在运行的任务数', ()
 test('固定时长作为只读参数显示，仍保留可调时长控件', () => {
   const source = readFileSync(join(root, 'src/components/creation/CreationPanel.vue'), 'utf8')
   assert.match(source, /v-if="durationRange.fixed"[^>]*>\{\{ durationRange.min \}\}s（固定）/)
-  assert.match(source, /v-else-if="durationOptions.length <= 3"/)
+  assert.match(source, /class="cp-btn-group">\s*<button\s+v-for="d in durationOptions"/)
+  assert.match(source, /class="cp-dur-slider"[\s\S]*?:step="durationRange.step"/)
 })
 
 test('FK 面板隐藏参考上限与常驻收费说明，仅保留视频参考 Token 提示与模型状态', () => {
@@ -1062,20 +1063,10 @@ test('successful, failed and cancelled creation tasks can prefill the panel with
     /function canRegenerateTask[\s\S]*?\n}\n\n(?:async )?function regenerateTask[\s\S]*?\n}\n\nasync function retryTaskPersistence/,
   )?.[0] || ''
 
-  assert.match(regenerate, /task\.source === 'creation'/)
-  assert.match(regenerate, /task\.status === 'success'/)
-  assert.match(regenerate, /task\.status === 'failed'/)
-  assert.match(regenerate, /task\.status === 'cancelled'/)
-  assert.match(regenerate, /Boolean\(task\.planSnapshot\)/)
-  assert.match(regenerate, /const isAiApp = plan\.apiStyle === 'rh-aiapp'/)
-  assert.match(regenerate, /switchTask\(isAiApp \? 'ai-app' : plan\.task\)/)
-  assert.match(regenerate, /switchModel\(plan\.modelId\)/)
-  assert.match(regenerate, /cpState\.aiAppWebappId/)
-  assert.match(regenerate, /cpState\.aiAppOutputType/)
-  assert.match(regenerate, /cpState\.aiAppBillingModel/)
-  assert.match(regenerate, /cpState\.fieldValues = \{\}/)
-  assert.match(regenerate, /cpState\.prompt = task\.prompt/)
-  assert.match(regenerate, /cpState\.files = \[\]/)
+  // Restored values are covered behaviorally in useCreationPlanMaterialization.test.ts.
+  assert.match(regenerate, /canRegenerateCreationTask\(task\)/)
+  assert.match(regenerate, /if \(beginPlanSnapshotPrefill\(plan\)\) await handleDiscoverAiApp\(\)/)
+  assert.match(regenerate, /applyPlanSnapshotParams\(plan, task\.prompt\)/)
   assert.match(regenerate, /showTaskHistory\.value = false/)
   assert.doesNotMatch(regenerate, /submitTask/)
   assert.match(source, /v-if="canRegenerateTask\(task\)" @click="regenerateTask\(task\)">重新生成<\/button>/)

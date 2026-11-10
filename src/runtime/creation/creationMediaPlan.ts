@@ -1,5 +1,6 @@
 import { getCreationModelSpec, getYihongGptImageSize } from './creationModelRegistry'
 import { isCatalogVideoModelName } from './pluginCatalog'
+import { localComfyVideos, buildLocalComfyVideo } from './localComfyVideo'
 import { sizeFromRatioResolution } from '@/utils/imageContracts'
 import type {
   CreationApiStyle,
@@ -177,6 +178,12 @@ export function buildCreationRunPlan(input: CreationRunPlanInput): CreationRunPl
   }
 
   plan.submitSummary = buildSubmitSummary(plan)
+  if (spec.apiStyle === 'comfy-workflow-video') {
+    const profile = localComfyVideos.value.find(item => item.id === spec.id)
+    if (!profile) throw new Error('本地模型配置不存在')
+    buildLocalComfyVideo(profile, normalizedParams)
+    plan.localWorkflow = JSON.parse(JSON.stringify(profile))
+  }
   return plan
 }
 

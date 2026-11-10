@@ -200,15 +200,6 @@ export function createDesktopProjectToolExecutor(input: {
     })
   }
 
-  async function readFileIfExists(path: string): Promise<string | null> {
-    try {
-      return (await readFile(path)).content
-    } catch (error) {
-      if (/不存在|not found|No such file|不可访问/i.test(error instanceof Error ? error.message : String(error))) return null
-      throw error
-    }
-  }
-
   async function listExternalFiles(path: string): Promise<DesktopFileEntry[]> {
     return await invoke('dev_list_external_files', { path, maxEntries: 1000 })
   }

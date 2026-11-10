@@ -1,0 +1,20 @@
+schema: spec-driven
+
+context: |
+  COMIC-BOX：韭菜盒子 AI 故事创作工作台的 Windows 独立定制版（Tauri 2 + Vue 3 + TypeScript，Rust 后端）。
+  本期只做 Windows 桌面；桌面能力只增不减。开发规则以仓库根目录 AGENTS.md 为准。
+  文档与变更说明使用简体中文；代码标识符与命令保持英文。
+  统一检查入口：pnpm run verify（lint、typecheck、focused 构建与运行、Rust 测试）。
+  没有实际执行的真实平台、生成或发布验证，不得写成已通过。
+
+rules:
+  proposal:
+    - 说明根因而不只是症状；列出受影响的文件与是否改变用户可见行为。
+    - 需要用户决策或真实平台验收的变更，在 Impact 中明确标注状态。
+  specs:
+    - 每个场景必须能对应一个自动化测试或一条明确的人工验收步骤。
+  design:
+    - 每个关键决定写明备选方案与不选的理由；优先复用仓库已有模式。
+  tasks:
+    - 先写能复现问题的失败测试，再实现（TDD）。
+    - 最后一组任务必须包含验证步骤，未执行的验证保持未勾选。

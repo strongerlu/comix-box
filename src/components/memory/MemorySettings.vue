@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, defineAsyncComponent, onMounted, ref, watch } from 'vue'
 import JcCloudLoginBox from '@/components/auth/JcCloudLoginBox.vue'
+import LocalComfyVideoSettings from '@/components/settings/LocalComfyVideoSettings.vue'
 import type { JcCloudLoginPayload, JcCloudLoginResult } from '@/components/auth/jcCloudAuth'
 import { useAgentStore } from '@/stores/agentStore'
 import { useTheme } from '@/composables/useTheme'
@@ -390,6 +391,7 @@ async function saveKey() {
           <strong>ComfyUI</strong>
           <p>通过官方 MCP 控制工作流，在输入框选择 @MCP → ComfyUI。</p>
           <div class="memory-local-actions"><button @click="tab = 'mcp'">打开 MCP 设置</button></div>
+          <LocalComfyVideoSettings />
         </section>
         </template>
       </div>

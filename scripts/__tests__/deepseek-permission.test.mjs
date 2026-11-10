@@ -4,11 +4,10 @@ import { createServer } from 'node:http'
 import { mkdtempSync, writeFileSync, readFileSync, existsSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
-import { execFileSync } from 'node:child_process'
 
 const vendor = '../../src-tauri/resources/deepseek-harness/node_modules/@deepseek-ai/'
 async function fixture(t, escalation, holdSecond = false) {
-  execFileSync(process.execPath, ['scripts/prepare-deepseek-harness.mjs'], { stdio: 'pipe' })
+  assert.ok(existsSync(new URL(`${vendor}dsh-sdk-client/lib/index.js`, import.meta.url)), '先运行 pnpm run build:deepseek-harness')
   const { DeepSeekHarness } = await import(`${vendor}dsh-sdk-client/lib/index.js`)
   const root = mkdtempSync(join(tmpdir(), 'jc-permission-'))
   const target = join(root, 'result.txt')

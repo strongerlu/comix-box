@@ -80,6 +80,17 @@ export function isLocalAssetUrl(input: string): boolean {
   return /^https?:\/\/asset\.localhost(?:[/?#]|$)/i.test(text)
 }
 
+const COMFY_OUTPUT_PATH = /[\\/]comfy-mcp[\\/][\da-f]{8}-[\da-f]{4}-[\da-f]{4}-[\da-f]{4}-[\da-f]{12}[\\/]outputs[\\/][^\\/]+\.(?:mp4|webm|mov|png|jpe?g|webp)$/i
+
+/** ComfyUI 私有输出的 asset 地址 → 本机路径；复制进项目前 Rust 还会按真实路径再校验。 */
+export function comfyOutputPath(input: string): string | undefined {
+  const text = String(input || '').trim()
+  if (!isLocalAssetUrl(text)) return undefined
+  let path: string
+  try { path = decodeURIComponent(new URL(text).pathname.slice(1)) } catch { return undefined }
+  return COMFY_OUTPUT_PATH.test(path) && !path.split(/[\\/]/).includes('..') ? path : undefined
+}
+
 export function isAllowedDownloadUrl(input: string): boolean {
   const text = String(input || '').trim()
   if (!text) return false
@@ -117,6 +128,7 @@ export function isAllowedCreationResultUrl(input: string, allowLargeDataUrl = fa
   const text = String(input || '').trim()
   if (/^data:(image|video|audio)\//i.test(text)) return isAllowedMediaDataUrl(text, allowLargeDataUrl)
   if (/^http:\/\/127\.0\.0\.1:8000\/view\?/i.test(text)) return true
+  if (comfyOutputPath(text)) return true
   if (isAllowedDevProxyResultUrl(text)) return true
   return isSafePublicHttpUrl(text)
 }

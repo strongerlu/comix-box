@@ -5,9 +5,10 @@ import { test } from 'node:test'
 import { createPinia, setActivePinia } from 'pinia'
 
 import { runCreationOperation, __resetCreationSubmissionCacheForTests } from '@/runtime/creation/creationMcpBridge'
-import { hasRecoverableResultFailure, isUncertainSubmission } from '@/runtime/creation/submissionSafety'
+import { duringPreSubmitCreation, hasRecoverableResultFailure, isUncertainSubmission, preSubmitCreationError, preSubmitCreationStage } from '@/runtime/creation/submissionSafety'
 import { creationTaskStage } from '@/utils/creationPresentation'
 import { buildCreationRunPlan } from '@/runtime/creation/creationMediaPlan'
+import { localComfyVideos } from '@/runtime/creation/localComfyVideo'
 import { __resetApiKeyMemoryCacheForTests } from '@/services/newApiClient'
 import { useProjectStore } from '@/stores/projectStore'
 import * as eventBus from '@/utils/eventBus'
@@ -287,6 +288,82 @@ test('official Comfy tasks retain their ID before waiting and do not capture a c
   }
 })
 
+test('custom local video tasks persist a detached workflow snapshot', { concurrency: false }, async () => {
+  const storage = installLocalStorage()
+  const files = installTauriTaskFileStore()
+  const previous = localComfyVideos.value
+  setActivePinia(createPinia())
+  __resetApiKeyMemoryCacheForTests('')
+  localComfyVideos.value = [{ id: 'local-comfy/user-snapshot', name: 'Local snapshot', minSeconds: 8, maxSeconds: 8,
+    workflow: { '1': { class_type: 'Video', inputs: { prompt: 'original' } } }, bindings: { prompt: '1.prompt' } }]
+  const store = useMediaTaskStore()
+  let submitted = false
+  __setCreationSubmitExecutorForTests(async (_request, _progress, callback) => {
+    await callback?.({ taskId: 'snapshot-job', pollUrl: 'comfy-mcp://task?prompt=snapshot-job', pollKind: 'video' })
+    submitted = true
+    throw Error('stop after submission')
+  })
+  try {
+    const plan = buildCreationRunPlan({ modelId: 'local-comfy/user-snapshot', params: { prompt: 'new shot', duration: 8 } })
+    const id = await store.submitTask({ type: 'video', model: plan.model, modelLabel: plan.label, prompt: 'new shot', source: 'creation', plan })
+    await waitFor(() => submitted && !store.isTaskActive(id))
+    const raw = JSON.parse((globalThis as any).localStorage.getItem('jc_media_tasks_v1') || '[]')
+    const saved = typeof raw === 'string' ? JSON.parse(raw) : raw
+    assert.equal(saved[0].planSnapshot.localWorkflow.workflow['1'].inputs.prompt, 'original')
+    plan.localWorkflow!.workflow['1'].inputs.prompt = 'later edit'
+    assert.equal(store.getTask(id)?.planSnapshot?.localWorkflow?.workflow['1'].inputs.prompt, 'original')
+  } finally {
+    localComfyVideos.value = previous
+    __setCreationSubmitExecutorForTests(null)
+    __resetApiKeyMemoryCacheForTests(null)
+    files.restore(); storage.restore()
+  }
+})
+
+test('ComfyUI video outputs are copied natively into the project without base64', { concurrency: false }, async () => {
+  const storage = installLocalStorage()
+  const files = installTauriTaskFileStore()
+  const internal = (globalThis as any).window.__TAURI_INTERNALS__
+  const originalInvoke = internal.invoke
+  const copies: Array<{ path: string; root: string; relativePath: string }> = []
+  internal.invoke = async (command: string, args: any) => {
+    if (command === 'comfy_mcp_read_output') throw Error('video must not be read as base64')
+    if (command === 'comfy_mcp_copy_output_to_project') { copies.push(args); return 11 }
+    return originalInvoke(command, args)
+  }
+  const projectStore = useProjectStore()
+  const originalProjectDir = projectStore.projectDir.value
+  projectStore.projectDir.value = '/projects/local'
+  const previous = localComfyVideos.value
+  setActivePinia(createPinia())
+  __resetApiKeyMemoryCacheForTests('')
+  localComfyVideos.value = [{ id: 'local-comfy/user-copy', name: 'Local copy', minSeconds: 8, maxSeconds: 8,
+    workflow: { '1': { class_type: 'Video', inputs: { prompt: 'original' } } }, bindings: { prompt: '1.prompt' } }]
+  const output = 'C:\\Users\\me\\AppData\\Roaming\\com.comicbox.desktop\\comfy-mcp\\0b7e2d5a-1c3f-4e8a-9b6d-2f4a6c8e0a1b\\outputs\\result.mp4'
+  const store = useMediaTaskStore()
+  __setCreationSubmitExecutorForTests(async () => ({ url: `http://asset.localhost/${encodeURIComponent(output)}`, type: 'video', taskId: 'comfy-job' }))
+  try {
+    const plan = buildCreationRunPlan({ modelId: 'local-comfy/user-copy', params: { prompt: 'new shot', duration: 8 } })
+    const id = await store.submitTask({ type: 'video', model: plan.model, modelLabel: plan.label, prompt: 'new shot', source: 'creation', plan })
+    await waitFor(() => !store.isTaskActive(id) && store.getTask(id)?.assetStatus !== undefined)
+    const task = store.getTask(id)
+    assert.equal(task?.assetStatus, 'local', task?.errorMsg)
+    assert.equal(copies.length, 1)
+    assert.equal(copies[0].path, output)
+    assert.equal(copies[0].root, '/projects/local')
+    assert.match(copies[0].relativePath, /^\.raw\/jc-media\/视频\/.+\.mp4$/)
+    assert.equal(task?.projectPath, copies[0].relativePath)
+    assert.equal(task?.assetUri, `/projects/local/${copies[0].relativePath}`)
+    assert.equal(files.calls.some(call => call.command === 'dev_write_file_bytes'), false)
+  } finally {
+    localComfyVideos.value = previous
+    __setCreationSubmitExecutorForTests(null)
+    __resetApiKeyMemoryCacheForTests(null)
+    projectStore.projectDir.value = originalProjectDir
+    files.restore(); storage.restore()
+  }
+})
+
 interface WebTaskFileStore {
   binaryWrites: Array<{
     projectId: string
@@ -483,7 +560,7 @@ test('mediaTaskStore keeps result URL validation at the media boundary', () => {
 
   assert.equal(source.includes('function validateTaskInputs'), true)
   assert.equal(source.includes('validateTaskInputs(params)'), true)
-  assert.equal(source.includes("import { isAllowedCreationResultUrl, isPublicUpstreamResultUrl } from '@/utils/urlSafety'"), true)
+  assert.match(source, /import \{[^}]*\bisAllowedCreationResultUrl\b[^}]*\} from '@\/utils\/urlSafety'/)
   assert.equal(source.includes('function assertSafeResultUrl'), false)
   assert.equal(source.includes("if (!isAllowedCreationResultUrl(downloadUrl, true)) throw new Error('媒体结果地址不安全，已阻止缓存')"), true)
   assert.equal(source.includes('const safeMediaUrl = assertSafeResultUrl(mediaUrl)'), false)
@@ -2859,6 +2936,47 @@ test(
     }
   },
 )
+
+test('only explicitly tagged errors are treated as never submitted', { concurrency: false }, async () => {
+  const storage = installLocalStorage()
+  setActivePinia(createPinia())
+  const environment = installWebCreationTestEnvironment()
+  __resetApiKeyMemoryCacheForTests('session-cloud')
+  const store = useMediaTaskStore()
+  const submit = async (error: Error) => {
+    __setCreationSubmitExecutorForTests(async () => { throw error })
+    const plan = buildCreationRunPlan({
+      modelId: 'runninghub/api/rh-gpt2-image',
+      params: { prompt: '保留人物', aspectRatio: '16:9', resolution: '2k', images: ['https://cdn.jiucaihezi.studio/input.png'] },
+    })
+    const id = await store.submitTask({ type: 'image', model: 'rh-gpt2-image', modelLabel: 'GPT2.0', prompt: '保留人物', referenceImages: ['https://cdn.jiucaihezi.studio/input.png'], source: 'creation', plan })
+    await new Promise(resolve => setTimeout(resolve, 50))
+    return store.getTask(id)!
+  }
+  try {
+    const upstream = await submit(new Error('上游不支持该分辨率，连接超时'))
+    assert.equal(upstream.error?.stage, 'submit')
+    assert.equal(isUncertainSubmission(upstream), true)
+
+    const upload = await submit(preSubmitCreationError('upload', '参考素材上传网络中断'))
+    assert.equal(upload.error?.category, 'upload')
+    assert.equal(upload.error?.stage, 'upload')
+    assert.equal(isUncertainSubmission(upload), false)
+  } finally {
+    __setCreationSubmitExecutorForTests(null)
+    environment.restore()
+    storage.restore()
+  }
+})
+
+test('pre-submit tagging keeps cancellation and existing tags untouched', async () => {
+  const aborted = Object.assign(new Error('任务已取消'), { name: 'AbortError' })
+  await assert.rejects(duringPreSubmitCreation('upload', async () => { throw aborted }), error => error === aborted && preSubmitCreationStage(error) === undefined)
+  const validation = preSubmitCreationError('validation', '参数无效')
+  await assert.rejects(duringPreSubmitCreation('upload', () => { throw validation }), error => preSubmitCreationStage(error) === 'validation')
+  await assert.rejects(duringPreSubmitCreation('upload', async () => { throw new TypeError('fetch failed') }), error => preSubmitCreationStage(error) === 'upload')
+  assert.equal(await duringPreSubmitCreation('upload', () => 'ok'), 'ok')
+})
 
 test(
   'mediaTaskStore restores async polling from persisted pollUrl and pollKind without guessing by model name',
