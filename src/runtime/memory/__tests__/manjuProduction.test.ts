@@ -243,7 +243,8 @@ test('full-auto mode is opt-in from the manju menu and only spends after the con
   assert.match(panel, /limits: limits\.value/)
   // 回归（2026-10-25 实测）：有未完成运行时路线下拉被锁，无法改用 H3 重新开始。
   assert.doesNotMatch(panel, /v-model="route" :disabled/)
-  assert.match(controller, /episodeInstruction\(episode, wikiRoot, state\.config, rewrite, resumeFrom\)/)
+  assert.match(controller, /episodeInstruction\(episode, scripts\[episode\] \|\|[^,]+, state\.config, rewrite, resumeFrom\)/)
+  assert.match(controller, /const found = episodeScripts\(paths\)/)
   assert.match(controller, /checkpointPath\(wikiRoot, state\.config\.videoModel, episode\)/)
   // 每次运行独立停止开关 + runId 落盘守卫：旧运行（含热更新遗留）发现记录属于新运行就退出（2026-10-25 实测两个运行互相覆盖）。
   assert.doesNotMatch(controller, /stopRequested/)

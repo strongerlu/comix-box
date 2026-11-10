@@ -1,7 +1,7 @@
 <template>
   <div v-if="draft" class="manju-auto-card" role="dialog" :aria-label="title">
     <strong>{{ title }}</strong>
-    <p v-if="!draft.episodes.length" class="manju-auto-warn">还没有分集剧本。请先在全自动模式下发送剧本（粘贴、附件或引用文件均可）。</p>
+    <p v-if="!draft.episodes.length" class="manju-auto-warn">还没有分集剧本。请先在全自动模式下发送剧本（粘贴、附件或引用文件均可），或先用短剧改编写出各集剧本。</p>
     <p v-else-if="!draft.ratio" class="manju-auto-warn">项目风格里还没有确认影片比例，请先确认比例与风格。</p>
     <template v-else>
       <div class="manju-auto-row">
@@ -10,6 +10,7 @@
           <label v-for="episode in draft.episodes" :key="episode" :title="textStatus[episode].title"><input v-model="episodes" type="checkbox" :value="episode">{{ episode }}<small v-if="textStatus[episode].label" class="manju-auto-text-status" :class="textStatus[episode].state">{{ textStatus[episode].label }}</small></label>
         </div>
       </div>
+      <p v-if="screenplayEpisodes.length" class="manju-auto-note">第 {{ screenplayEpisodes.join('、') }} 集使用短剧改编剧本（剧本/第N集/分集剧本.md）。</p>
       <p v-if="advice" class="manju-auto-note" :title="draft.advice.reason">项目风格建议：{{ advice }}</p>
       <label class="manju-auto-row"><span>参考图</span>
         <select v-model="pureText">
@@ -308,6 +309,7 @@ const videoModel = computed(() => {
   return model && { ...model, ...(videoProfile.value && { duration: videoProfile.value.duration, maxImages: videoProfile.value.maxImages, resolutions: videoProfile.value.resolutions ?? model.resolutions }) }
 })
 const advice = computed(() => props.draft && adviceSummary(props.draft.advice, imageModel.value?.price))
+const screenplayEpisodes = computed(() => (props.draft?.episodes || []).filter(episode => !props.draft?.scripts[episode]?.includes('/项目资料/分集剧本/')))
 // 换模型时默认最低分辨率（测试最省钱）；分档价格按所选分辨率参与预算。
 watch(videoModel, model => {
   if (preferredResolution && model?.resolutions?.includes(preferredResolution)) videoResolution.value = preferredResolution

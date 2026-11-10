@@ -16,6 +16,7 @@ const owner = '/Users/someone/擦边'
 const draft: ManjuAutoDraft = {
   wikiRoot: 'wiki',
   episodes: [1, 2, 3],
+  scripts: { 1: 'wiki/项目资料/分集剧本/第1集分集剧本.md', 2: 'wiki/项目资料/分集剧本/第2集分集剧本.md', 3: 'wiki/项目资料/分集剧本/第3集分集剧本.md' },
   ratio: '9:16',
   advice: { needed: [], skipped: [] },
   imageModels: [{ id: 'img-a', label: '生图 A', price: '0.2元/张' }, { id: 'img-b', label: '生图 B' }],

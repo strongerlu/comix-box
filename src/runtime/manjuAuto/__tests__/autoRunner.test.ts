@@ -8,7 +8,7 @@ test('completion labels distinguish text, unreviewed output, legacy and version-
   assert.equal(completedEpisodeLabel({ phase: 'done', videosReviewed: true }, {}), '已拼接·审片状态未记录')
   assert.equal(completedEpisodeLabel({ phase: 'done', videosReviewed: true, videoReviewKey: 'current' }, {}), '已拼接·已人工确认')
 })
-import { createAutoRun, deriveCheckpoint, episodeInstruction, episodeTextStatus, estimateUnitCost, handleCheckpointSaved, modelLimits, priceForResolution, resumeAutoRun, revisionInstruction, runAuto, type AutoRunConfig, type AutoRunnerDeps, type RunnerCheckpoint } from '../autoRunner'
+import { createAutoRun, deriveCheckpoint, episodeInstruction, episodeScripts, episodeTextStatus, estimateUnitCost, handleCheckpointSaved, modelLimits, priceForResolution, resumeAutoRun, revisionInstruction, runAuto, type AutoRunConfig, type AutoRunnerDeps, type RunnerCheckpoint } from '../autoRunner'
 
 type Task = { status: string; localPath?: string; error?: string }
 
@@ -276,14 +276,33 @@ test('model limits come from the chosen video model: fixed tiers use the largest
 })
 
 test('episode instruction names the route and the model limits the pipeline must write into plan', () => {
-  const text = episodeInstruction(3, 'wiki', { videoModel: 'H3', limits: { max_seconds: 28, max_refs: 6 } })
+  const text = episodeInstruction(3, 'wiki/项目资料/分集剧本/第3集分集剧本.md', { videoModel: 'H3', limits: { max_seconds: 28, max_refs: 6 } })
   assert.match(text, /【全自动成片·第3集】/)
   assert.match(text, /视频模型 H3/)
   assert.match(text, /每段不超过 28 秒/)
   assert.match(text, /最多 6 张参考图/)
   assert.match(text, /"limits":\{"max_seconds":28,"max_refs":6\}/)
-  const tiers = episodeInstruction(1, 'wiki', { videoModel: 'Seedance', limits: { max_seconds: 30, allowed_seconds: [15, 30] } })
+  const tiers = episodeInstruction(1, 'wiki/项目资料/分集剧本/第1集分集剧本.md', { videoModel: 'Seedance', limits: { max_seconds: 30, allowed_seconds: [15, 30] } })
   assert.match(tiers, /只支持 15\/30 秒/)
+})
+
+test('a short-drama screenplay is used as the episode script, and an ingested script wins for the same episode', () => {
+  assert.deepEqual(episodeScripts([
+    'wiki/剧本/第001集/分集剧本.md',
+    'wiki/剧本/第001集/工程剧本.md',
+    'wiki/剧本/第002集/分集剧本.md',
+    'wiki/项目资料/分集剧本/第1集分集剧本.md',
+    'wiki/改编方案/分集切分/第003集原文.md',
+  ]), {
+    wikiRoot: 'wiki',
+    scripts: { 1: 'wiki/项目资料/分集剧本/第1集分集剧本.md', 2: 'wiki/剧本/第002集/分集剧本.md' },
+  })
+  assert.deepEqual(episodeScripts(['docs/wiki/剧本/第010集/分集剧本.md']), { wikiRoot: 'docs/wiki', scripts: { 10: 'docs/wiki/剧本/第010集/分集剧本.md' } })
+  assert.deepEqual(episodeScripts(['wiki/项目资料/分集剧本/第1集分集剧本.md', 'other/剧本/第002集/分集剧本.md']).scripts, { 1: 'wiki/项目资料/分集剧本/第1集分集剧本.md' }, '只采用选定 Wiki 根下的剧本')
+  assert.deepEqual(episodeScripts(['wiki/README.md']), { wikiRoot: undefined, scripts: {} })
+
+  const text = episodeInstruction(2, 'wiki/剧本/第002集/分集剧本.md', { videoModel: 'Seedance' })
+  assert.match(text, /剧本使用 wiki\/剧本\/第002集\/分集剧本\.md，/)
 })
 
 test('resuming keeps the original video route even if the card changed it', () => {
@@ -349,16 +368,16 @@ test('an episode already complete from free creation skips the text turn; one wr
 })
 
 test('episode instruction for a rewrite tells the pipeline why the old prompts must be redone from plan', () => {
-  const text = episodeInstruction(2, 'wiki', { videoModel: 'H3', limits: { max_seconds: 15 } }, '片段1 30 秒，超过所选模型 15 秒')
+  const text = episodeInstruction(2, 'wiki/项目资料/分集剧本/第2集分集剧本.md', { videoModel: 'H3', limits: { max_seconds: 15 } }, '片段1 30 秒，超过所选模型 15 秒')
   assert.match(text, /重新执行/)
   assert.match(text, /片段1 30 秒/)
 })
 
 test('a partially written episode resumes from its saved stage instead of re-planning', () => {
-  const text = episodeInstruction(1, 'wiki', { videoModel: 'Seedance', limits: { max_seconds: 30 } }, undefined, 'engineering')
+  const text = episodeInstruction(1, 'wiki/项目资料/分集剧本/第1集分集剧本.md', { videoModel: 'Seedance', limits: { max_seconds: 30 } }, undefined, 'engineering')
   assert.match(text, /已有进度到 engineering 阶段/)
   assert.doesNotMatch(text, /从 plan/)
-  assert.match(episodeInstruction(1, 'wiki', { videoModel: 'Seedance' }), /从 plan 连续执行/)
+  assert.match(episodeInstruction(1, 'wiki/项目资料/分集剧本/第1集分集剧本.md', { videoModel: 'Seedance' }), /从 plan 连续执行/)
 })
 
 test('revision instruction lists the review notes in segment order, whole-episode note first', () => {
@@ -467,7 +486,7 @@ test('references are per segment: only the segment that needs the asset carries 
 
 test('pure text-to-video limits (max_refs 0) reach plan, mark prompts with images stale, and survive derivation', () => {
   const limits = { max_seconds: 30, max_refs: 0 }
-  const text = episodeInstruction(2, 'wiki', { videoModel: 'H3', limits })
+  const text = episodeInstruction(2, 'wiki/项目资料/分集剧本/第2集分集剧本.md', { videoModel: 'H3', limits })
   assert.match(text, /"limits":\{"max_seconds":30,"max_refs":0\}/)
   assert.match(text, /纯文生/)
   assert.match(text, /T2VA/)
@@ -479,7 +498,7 @@ test('pure text-to-video limits (max_refs 0) reach plan, mark prompts with image
 })
 
 test('episode instruction: references are decided per segment, and the user\'s explicit requirements override skill defaults', () => {
-  const text = episodeInstruction(1, 'wiki', { videoModel: 'H3', limits: { max_seconds: 30, max_refs: 9 } })
+  const text = episodeInstruction(1, 'wiki/项目资料/分集剧本/第1集分集剧本.md', { videoModel: 'H3', limits: { max_seconds: 30, max_refs: 9 } })
   assert.match(text, /按段/)
   assert.match(text, /优先于 Skill 默认/)
 })

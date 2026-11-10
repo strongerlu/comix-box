@@ -158,7 +158,24 @@ function refsRule(limits: ModelLimits) {
 /** 用户明确要求优先（2026-10-26 用户确认）：Skill 只给默认值，只有超出模型硬限制才暂停。 */
 const USER_FIRST = '用户的明确制作要求优先于 Skill 默认路线（如要求不生图、纯文生、不用参考图），只有违反模型硬限制（时长、参考图上限）才以 blocked 说明'
 
-export function episodeInstruction(episode: number, wikiRoot: string, config: Pick<AutoRunConfig, 'videoModel' | 'limits'>, rewrite?: string, resumeFrom?: string): string {
+/**
+ * 每集剧本：漫剧入稿的分集剧本优先，没有时直接引用短剧改编写好的剧本，不另存副本。
+ * Wiki 根以入稿剧本所在根为准，只采用该根下的剧本。
+ */
+export function episodeScripts(paths: string[]): { wikiRoot?: string; scripts: Record<number, string> } {
+  const found = paths.flatMap(path => {
+    const ingested = path.match(/^(.*)\/项目资料\/分集剧本\/第(\d+)集分集剧本\.md$/)
+    const screenplay = ingested ? null : path.match(/^(.*)\/剧本\/第(\d+)集\/分集剧本\.md$/)
+    const match = ingested || screenplay
+    return match && Number(match[2]) >= 1 ? [{ root: match[1], episode: Number(match[2]), path, ingested: Boolean(ingested) }] : []
+  })
+  const wikiRoot = (found.find(item => item.ingested) || found[0])?.root
+  const scripts: Record<number, string> = {}
+  for (const item of found) if (item.root === wikiRoot && (item.ingested || !scripts[item.episode])) scripts[item.episode] = item.path
+  return { wikiRoot, scripts }
+}
+
+export function episodeInstruction(episode: number, script: string, config: Pick<AutoRunConfig, 'videoModel' | 'limits'>, rewrite?: string, resumeFrom?: string): string {
   const limits = config.limits ?? modelLimits(config.videoModel, {})
   const duration = limits.allowed_seconds?.length
     ? `所选视频模型只支持 ${limits.allowed_seconds.join('/')} 秒：每段尽量写满一档（优先 ${limits.max_seconds} 秒），每段不超过 ${limits.max_seconds} 秒`
@@ -166,7 +183,7 @@ export function episodeInstruction(episode: number, wikiRoot: string, config: Pi
   const plan = JSON.stringify(planLimits(limits))
   const redo = rewrite ? `本集已有提示词不符合所选视频模型（${rewrite}），请从 plan 重新执行，按新限制重写分段与视频提示词，已确认的项目资料与资产提示词可沿用。` : ''
   const resume = resumeFrom && !rewrite ? `本集已有进度到 ${resumeFrom} 阶段：按「输入与恢复」先用该阶段原 outputs 保存 running 进度，再续做之后的阶段，已完成阶段的产物不重写，` : '从 plan '
-  return `【全自动成片·第${episode}集】${redo}请按 jc-manju-pipeline 执行第${episode}集，视频模型 ${config.videoModel}，剧本使用 ${wikiRoot}/项目资料/分集剧本/第${episode}集分集剧本.md，比例与风格沿用已确认的项目风格，并遵守本对话入稿时用户提出的制作要求（${USER_FIRST}），${resume}连续执行到 complete。${duration}${refsRule(limits)}；plan 进度写入 "limits":${plan}。新写或修改的分段在 segments 中写 transition:{type,reason}，type 为 continue（同一镜头动作接续）、cut（换镜头）或 scene_change（换场景/时空），首段用 scene_change；根据工程稿写明依据，不能把所有后续段都标为接续。`
+  return `【全自动成片·第${episode}集】${redo}请按 jc-manju-pipeline 执行第${episode}集，视频模型 ${config.videoModel}，剧本使用 ${script}，比例与风格沿用已确认的项目风格，并遵守本对话入稿时用户提出的制作要求（${USER_FIRST}），${resume}连续执行到 complete。${duration}${refsRule(limits)}；plan 进度写入 "limits":${plan}。新写或修改的分段在 segments 中写 transition:{type,reason}，type 为 continue（同一镜头动作接续）、cut（换镜头）或 scene_change（换场景/时空），首段用 scene_change；根据工程稿写明依据，不能把所有后续段都标为接续。`
 }
 
 /** 审片修改意见：index 为段号（从 1 起），0 表示整集意见。 */

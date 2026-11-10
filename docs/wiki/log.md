@@ -3285,3 +3285,4 @@ Logo 改为扁平陶土色底和奶油色双格漫画气泡，去掉渐变与装
 - 21 个读取与唯一目标写入命令改为后台线程执行（桌面手测未做）；lint 警告 203→88 并设上限；资源协议范围维持 `**`，以 CSP 禁止外部与内联脚本为边界并加测试；任务记录分页抽为组合式函数，文档转换测试改为行为测试；条件保存窗口实测无法用持有句柄关闭，记为已知限制。见 `openspec/changes/archive/2026-11-10-*` 与 `openspec/changes/async-blocking-commands/`。
 - 文件树建树筛选、对话模型分组、创作模型分组从三个大组件抽为独立模块并改为行为测试，verify 通过。见 `openspec/changes/archive/2026-11-10-split-large-components-round2/`。
 - 按“纯规则 / 交互组合式函数 / 组件共享状态”三层拆出输入框菜单、@ 提及候选、资源剪贴板与媒体排序编号，相关源码正则测试改为行为测试，verify 通过。见 `openspec/changes/archive/2026-11-10-split-component-state-boundaries/`。
+- 漫剧全自动可直接使用短剧改编写好的各集剧本（入稿剧本优先，不复制），verify 通过，真实出片未测。见 [[开发/漫剧剧本到成片全自动流水线执行方案-2026-10-25]] 与 `openspec/changes/archive/2026-11-10-short-drama-script-handoff/`。
